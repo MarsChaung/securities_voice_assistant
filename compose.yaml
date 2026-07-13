@@ -1,0 +1,10 @@
+services:
+  orchestrator:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      SVA_APP_ENV: development
+      SVA_LOG_LEVEL: INFO
+      SVA_LLM_BASE_URL: http://host.docker.internal:12345/v1
+      SVA_TTS_BASE_URL: http://host.docker.internal:8000/v1

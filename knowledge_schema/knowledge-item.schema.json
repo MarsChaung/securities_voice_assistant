@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.internal/schemas/knowledge-item.schema.json",
+  "title": "KnowledgeItem",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "knowledge_id",
+    "title",
+    "standard_answer",
+    "source_uri",
+    "source_type",
+    "effective_at",
+    "review_at",
+    "owner_unit",
+    "author",
+    "reviewer",
+    "approver",
+    "version",
+    "status",
+    "public_answer_allowed",
+    "allowed_intents",
+    "prohibited_extensions"
+  ],
+  "properties": {
+    "knowledge_id": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "standard_answer": {"type": "string", "minLength": 1},
+    "source_uri": {"type": "string", "minLength": 1},
+    "source_type": {"type": "string", "minLength": 1},
+    "products": {"type": "array", "items": {"type": "string"}},
+    "app_platforms": {"type": "array", "items": {"type": "string"}},
+    "app_versions": {"type": "array", "items": {"type": "string"}},
+    "effective_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "review_at": {"type": "string", "format": "date-time"},
+    "owner_unit": {"type": "string", "minLength": 1},
+    "author": {"type": "string", "minLength": 1},
+    "reviewer": {"type": "string", "minLength": 1},
+    "approver": {"type": "string", "minLength": 1},
+    "approved_at": {"type": ["string", "null"], "format": "date-time"},
+    "version": {"type": "string", "minLength": 1},
+    "change_summary": {"type": "string"},
+    "previous_version": {"type": ["string", "null"]},
+    "status": {
+      "enum": ["draft", "review", "approved", "published", "expired", "revoked"]
+    },
+    "public_answer_allowed": {"type": "boolean"},
+    "allowed_intents": {"type": "array", "items": {"type": "string"}},
+    "prohibited_extensions": {"type": "array", "items": {"type": "string"}}
+  }
+}
+
