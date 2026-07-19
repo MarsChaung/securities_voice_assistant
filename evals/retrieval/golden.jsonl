@@ -1,0 +1,8 @@
+{"case_id":"retrieve-dca-concept","synthetic":true,"input":"什麼是台股定期定額？","intent":"general_securities_knowledge","expected_knowledge_id":"K-CATHAY-DCA-001"}
+{"case_id":"retrieve-account-comparison-different","synthetic":true,"input":"證券帳戶與銀行交割帳戶有什麼不一樣？","intent":"general_securities_knowledge","expected_knowledge_id":"K-CATHAY-NEWBIE-001"}
+{"case_id":"retrieve-account-comparison-difference","synthetic":true,"input":"證券帳戶跟銀行交割帳戶有何不同？","intent":"general_securities_knowledge","expected_knowledge_id":"K-CATHAY-NEWBIE-001"}
+{"case_id":"retrieve-account-comparison-where","synthetic":true,"input":"證券帳戶、銀行交割帳戶差在哪？","intent":"general_securities_knowledge","expected_knowledge_id":"K-CATHAY-NEWBIE-001"}
+{"case_id":"retrieve-cathay-app-dca","synthetic":true,"input":"國泰證券 App 的定期投資怎麼操作？","intent":"app_public_help","expected_knowledge_id":"K-CATHAY-DCA-004"}
+{"case_id":"retrieve-tree-app-account-location","synthetic":true,"input":"樹精靈 App 如何查看交割帳戶位置？","intent":"app_public_help","expected_knowledge_id":"K-CATHAY-NEWBIE-003"}
+{"case_id":"reject-ambiguous-drip","synthetic":true,"input":"請說明股息再投資","intent":"general_securities_knowledge","expected_knowledge_id":null}
+{"case_id":"reject-web-order-with-app-only-source","synthetic":true,"input":"Web 版要如何下單？","intent":"order_entry_tutorial","expected_knowledge_id":null}

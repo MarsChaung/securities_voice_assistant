@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.internal/schemas/knowledge-source.schema.json",
+  "title": "KnowledgeSource",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source_id",
+    "supplied_url",
+    "canonical_url",
+    "title",
+    "publisher",
+    "source_type",
+    "retrieved_at",
+    "topics",
+    "status"
+  ],
+  "properties": {
+    "source_id": {"type": "string", "pattern": "^SRC-[A-Z0-9-]+$"},
+    "supplied_url": {"type": "string", "format": "uri"},
+    "canonical_url": {"type": "string", "format": "uri"},
+    "title": {"type": "string", "minLength": 1},
+    "publisher": {"type": "string", "minLength": 1},
+    "source_type": {"const": "official_web"},
+    "retrieved_at": {"type": "string", "format": "date-time"},
+    "topics": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "status": {"enum": ["active", "inaccessible", "retired"]},
+    "notes": {"type": ["string", "null"]}
+  }
+}

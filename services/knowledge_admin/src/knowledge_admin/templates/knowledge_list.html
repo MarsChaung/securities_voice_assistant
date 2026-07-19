@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}知識項目{% endblock %}
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">KNOWLEDGE CATALOG</p>
+      <h1>知識項目</h1>
+      <p>檢視內容、來源與生命週期狀態，並進入明細執行本機治理流程。</p>
+    </div>
+    <div class="total"><strong>{{ items|length }}</strong><span>筆</span></div>
+  </section>
+
+  <section class="metrics" aria-label="狀態統計">
+    {% for status, count in counts.items() %}
+      <a class="metric {% if selected_status == status %}active{% endif %}" href="/admin/knowledge?status={{ status.value }}">
+        <span>{{ status_labels[status] }}</span><strong>{{ count }}</strong>
+      </a>
+    {% endfor %}
+  </section>
+  <p class="lifecycle-note">已發布知識超過內容到期日或複審到期時間後，清單會顯示為「已過期」；資料庫仍保留原發布記錄，供建立複審新版與稽核追溯。</p>
+
+  <form class="filters" method="get" action="/admin/knowledge">
+    <label>關鍵字
+      <input type="search" name="q" value="{{ query }}" maxlength="100" placeholder="標題、編號或答案內容">
+    </label>
+    <label>狀態
+      <select name="status">
+        <option value="">全部狀態</option>
+        {% for status in status_labels %}
+          <option value="{{ status.value }}" {% if selected_status == status %}selected{% endif %}>{{ status_labels[status] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>資料來源
+      <select name="source_id">
+        <option value="">全部來源</option>
+        {% for source in sources %}
+          <option value="{{ source.source_id }}" {% if selected_source_id == source.source_id %}selected{% endif %}>{{ source.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">套用篩選</button>
+    <a class="reset" href="/admin/knowledge">清除</a>
+  </form>
+
+  <section class="table-card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>知識內容</th><th>狀態</th><th>複審到期時間</th><th>產品／平台</th><th>版本</th><th>來源</th></tr></thead>
+        <tbody>
+          {% for item in items %}
+            {% set display_status = display_statuses[item.knowledge_id] %}
+            <tr>
+              <td><a class="item-link" href="/admin/knowledge/{{ item.knowledge_id }}">{{ item.title }}</a><small>{{ item.knowledge_id }}</small></td>
+              <td><span class="status status-{{ display_status.value }}">{{ status_labels[display_status] }}</span></td>
+              <td class="deadline {% if item.knowledge_id in overdue_ids %}deadline-overdue{% endif %}">
+                {% if item.review_at %}{{ format_event_time(item.review_at) }}{% else %}尚未設定{% endif %}
+                {% if item.knowledge_id in overdue_ids %}<small>已逾期</small>{% endif %}
+              </td>
+              <td>{{ item.products|join('、') }}<small>{{ item.platforms|join('、') }}</small></td>
+              <td>{{ item.version }}</td>
+              <td><small>{{ item.source_id }}</small></td>
+            </tr>
+          {% else %}
+            <tr><td class="empty" colspan="6">沒有符合條件的知識項目。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

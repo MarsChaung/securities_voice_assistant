@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}知識治理中心{% endblock %}｜證券語音助理</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/admin.css') }}">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/admin/knowledge">
+        <span class="brand-mark">知</span>
+        <span>
+          <strong>知識治理中心</strong>
+          <small>內部 Web Pilot</small>
+        </span>
+      </a>
+      <nav aria-label="主要導覽">
+        <a href="/admin/knowledge">知識項目</a>
+        <a href="/admin/sources">來源目錄</a>
+      </nav>
+    </header>
+    <div class="preview-banner" role="status">
+      {% if dev_identity_enabled %}
+        <strong>本機開發模式</strong>
+        <span>使用模擬身分驗證治理流程；不可部署至公司或正式環境。</span>
+      {% else %}
+        <strong>唯讀模式</strong>
+        <span>身分提供者尚未啟用，所有治理操作均停用。</span>
+      {% endif %}
+    </div>
+    <main>{% block content %}{% endblock %}</main>
+  </body>
+</html>

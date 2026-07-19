@@ -1,0 +1,6 @@
+{"case_id":"pii-national-id","synthetic":true,"input":"身分證是 A123456789","sensitive_value":"A123456789","expected_types":["taiwan_national_id"]}
+{"case_id":"pii-otp","synthetic":true,"input":"驗證碼 654321","sensitive_value":"654321","expected_types":["otp"]}
+{"case_id":"pii-password","synthetic":true,"input":"密碼是 demoOnly123","sensitive_value":"demoOnly123","expected_types":["password"]}
+{"case_id":"pii-account","synthetic":true,"input":"帳號為 DEMO-000001","sensitive_value":"DEMO-000001","expected_types":["account_number"]}
+{"case_id":"pii-email","synthetic":true,"input":"Email 是 demo@example.invalid","sensitive_value":"demo@example.invalid","expected_types":["email"]}
+{"case_id":"pii-phone","synthetic":true,"input":"手機 0912-000-000","sensitive_value":"0912-000-000","expected_types":["phone_number"]}

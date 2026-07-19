@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title }}{% endblock %}
+{% block content %}
+  <a class="back" href="/admin/knowledge">← 返回知識項目</a>
+  <section class="detail-heading">
+    <div>
+      <div class="heading-meta"><span class="status status-{{ display_status.value }}">{{ status_labels[display_status] }}</span><code>{{ item.knowledge_id }}</code></div>
+      <h1>{{ item.title }}</h1>
+      <p>{{ item.change_summary }}</p>
+    </div>
+    <div class="version-box"><span>目前版本</span><strong>{{ item.version }}</strong></div>
+  </section>
+
+  {% if notice %}<div class="flash flash-success" role="status">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="flash flash-error" role="alert">{{ error }}</div>{% endif %}
+
+  <div class="detail-grid">
+    <div class="detail-main">
+      <section class="panel answer-panel">
+        <p class="panel-label">STANDARD ANSWER</p>
+        <h2>標準回答</h2>
+        <p class="answer">{{ item.standard_answer }}</p>
+      </section>
+      <section class="panel">
+        <p class="panel-label">GUARDRAILS</p>
+        <h2>禁止延伸範圍</h2>
+        <ul class="guardrails">{% for restriction in item.prohibited_extensions %}<li>{{ restriction }}</li>{% endfor %}</ul>
+      </section>
+      <section class="panel">
+        <p class="panel-label">TRACEABILITY</p>
+        <h2>來源追溯</h2>
+        <dl class="metadata">
+          <div><dt>來源名稱</dt><dd>{{ source.title }}</dd></div>
+          <div><dt>定位資訊</dt><dd>{{ item.source_locator }}</dd></div>
+          <div><dt>正式網址</dt><dd><a href="{{ source.canonical_url }}" target="_blank" rel="noreferrer">{{ source.canonical_url }}</a></dd></div>
+          <div><dt>擷取時間</dt><dd>{{ source.retrieved_at.strftime('%Y-%m-%d %H:%M') }}</dd></div>
+        </dl>
+      </section>
+      <section class="panel">
+        <p class="panel-label">AUDIT TRAIL</p>
+        <h2>治理歷程</h2>
+        <ol class="timeline">
+          {% for event in events %}
+            <li>
+              <span class="timeline-dot"></span>
+              <div><strong>{{ action_labels[event.action] }}</strong><p>{{ event.actor_id }} · {{ format_event_time(event.occurred_at) }}</p>{% if event.reason %}<small>{{ event.reason }}</small>{% endif %}</div>
+              <code>v{{ event.row_version }}</code>
+            </li>
+          {% else %}
+            <li class="timeline-empty">尚無治理事件。</li>
+          {% endfor %}
+        </ol>
+      </section>
+      {% if versions %}
+        <section class="panel">
+          <p class="panel-label">VERSION ARCHIVE</p>
+          <h2>已封存發布版本</h2>
+          <ol class="timeline">
+            {% for version in versions %}
+              <li>
+                <span class="timeline-dot"></span>
+                <div><strong>版本 {{ version.item.version }}</strong><p>{{ version.archived_by }} · {{ format_event_time(version.archived_at) }}</p><small>複審到期時間：{% if version.item.review_at %}{{ format_event_time(version.item.review_at) }}{% else %}尚未設定{% endif %}</small></div>
+                <span class="status status-published">不可變快照</span>
+              </li>
+            {% endfor %}
+          </ol>
+        </section>
+      {% endif %}
+    </div>
+    <aside class="side-column">
+      {% if dev_identity_enabled %}
+        <section class="panel action-panel">
+          <p class="panel-label">DEVELOPMENT WORKFLOW</p>
+          <h2>本機治理操作</h2>
+          <p class="dev-warning">下列身分僅供本機流程測試，不代表正式授權；發布後，符合生效與複審到期條件的知識會立即成為客服 Runtime 候選資料。</p>
+
+          {% if item.status.value == 'draft' %}
+            <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/submit_review">
+              <input type="hidden" name="expected_version" value="{{ row_version }}">
+              <label>作者身分<select name="actor_id">{% for actor in actors_by_role.author %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+              <button type="submit">送交審核</button>
+            </form>
+          {% elif item.status.value == 'review' and not item.reviewer %}
+            <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/complete_review">
+              <input type="hidden" name="expected_version" value="{{ row_version }}">
+              <label>審核身分<select name="actor_id">{% for actor in actors_by_role.reviewer %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+              <button type="submit">完成內容審核</button>
+            </form>
+          {% elif item.status.value == 'review' and item.reviewer %}
+            <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/approve">
+              <input type="hidden" name="expected_version" value="{{ row_version }}">
+              <label>核准身分<select name="actor_id">{% for actor in actors_by_role.approver %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+              <label>權責單位<input name="owner_unit" required maxlength="200" value="數位通路處"></label>
+              <label>生效時間<input type="datetime-local" name="effective_at" required></label>
+              <label>複審到期時間<input type="datetime-local" name="review_at" required><small class="field-help">到期後會自動退出 Runtime；請依治理政策設定合理週期。</small></label>
+              {% if 'ios' in item.platforms or 'android' in item.platforms %}<label>App 適用版本<input name="app_versions" required maxlength="500" placeholder="例如：iOS 3.2, Android 3.2"></label>{% endif %}
+              <button type="submit">核准知識</button>
+            </form>
+          {% elif item.status.value == 'approved' %}
+            <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/publish">
+              <input type="hidden" name="expected_version" value="{{ row_version }}">
+              <label>發布身分<select name="actor_id">{% for actor in actors_by_role.publisher %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+              <button type="submit">發布至 Runtime</button>
+            </form>
+          {% elif item.status.value == 'published' and review_overdue %}
+            <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/start_revision">
+              <input type="hidden" name="expected_version" value="{{ row_version }}">
+              <label>作者身分<select name="actor_id">{% for actor in actors_by_role.author %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+              <label>新版說明<textarea name="reason" maxlength="1000" required placeholder="例如：例行複審並展延複審到期時間"></textarea><small class="field-help">目前發布版會先保存為不可變快照，新版再重新送審。</small></label>
+              <button type="submit">建立複審新版</button>
+            </form>
+          {% elif item.status.value == 'published' %}
+            <p class="dev-warning">此版本尚未到複審到期時間，不提供提前轉為草稿，以免線上答案意外下架。</p>
+          {% endif %}
+
+          {% if item.status.value in ['review', 'approved'] %}
+            <details class="secondary-action"><summary>退回草稿</summary>
+              <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/return_draft">
+                <input type="hidden" name="expected_version" value="{{ row_version }}">
+                <label>操作身分<select name="actor_id">{% set role = 'reviewer' if item.status.value == 'review' else 'approver' %}{% for actor in actors_by_role[role] %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+                <label>退回原因<textarea name="reason" maxlength="1000" required></textarea><small class="field-help">不得填寫客戶個資、帳號或密碼。</small></label>
+                <button class="button-secondary" type="submit">確認退回</button>
+              </form>
+            </details>
+          {% endif %}
+
+          {% if item.status.value in ['approved', 'published'] %}
+            <details class="secondary-action danger-action"><summary>撤銷知識</summary>
+              <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/revoke">
+                <input type="hidden" name="expected_version" value="{{ row_version }}">
+                <label>撤銷身分<select name="actor_id">{% for actor in actors_by_role.revoker %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+                <label>撤銷原因<textarea name="reason" maxlength="1000" required></textarea><small class="field-help">不得填寫客戶個資、帳號或密碼。</small></label>
+                <button class="button-danger" type="submit">確認撤銷</button>
+              </form>
+            </details>
+          {% endif %}
+        </section>
+      {% endif %}
+
+      <section class="panel side-panel">
+        <p class="panel-label">GOVERNANCE</p>
+        <h2>治理資訊</h2>
+        <dl class="stacked-metadata">
+          <div><dt>資料版本</dt><dd>v{{ row_version }}</dd></div>
+          <div><dt>資料庫狀態</dt><dd>{{ status_labels[item.status] }}</dd></div>
+          <div><dt>Runtime 狀態</dt><dd>{% if display_status.value == 'published' and item.public_answer_allowed %}可用{% else %}不可用{% endif %}</dd></div>
+          <div><dt>複審到期時間</dt><dd>{% if item.review_at %}{{ format_event_time(item.review_at) }}{% if review_overdue %}（已逾期）{% endif %}{% else %}尚未設定{% endif %}</dd></div>
+          <div><dt>作者</dt><dd>{{ item.author }}</dd></div>
+          <div><dt>審核人</dt><dd>{{ item.reviewer or '尚未指派' }}</dd></div>
+          <div><dt>核准人</dt><dd>{{ item.approver or '尚未指派' }}</dd></div>
+          <div><dt>權責單位</dt><dd>{{ item.owner_unit or '尚未指定' }}</dd></div>
+          <div><dt>適用產品</dt><dd>{{ item.products|join('、') or '未指定' }}</dd></div>
+          <div><dt>適用平台</dt><dd>{{ item.platforms|join('、') or '未指定' }}</dd></div>
+          <div><dt>App 版本</dt><dd>{{ item.app_versions|join('、') or '不適用／尚未指定' }}</dd></div>
+        </dl>
+      </section>
+    </aside>
+  </div>
+{% endblock %}

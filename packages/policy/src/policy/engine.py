@@ -34,7 +34,23 @@ class DomainPolicyEngine:
             "POL-REFUSE-001",
             "transaction_request",
             PolicyAction.REFUSE,
-            ("下單", "買進", "賣出", "改單", "刪單", "取消委託", "幫我買", "幫我賣"),
+            (
+                "幫我下單",
+                "替我下單",
+                "請幫我下單",
+                "我要下單",
+                "立即下單",
+                "現在下單",
+                "下單買",
+                "下單賣",
+                "買進",
+                "賣出",
+                "改單",
+                "刪單",
+                "取消委託",
+                "幫我買",
+                "幫我賣",
+            ),
         ),
         PolicyRule(
             "POL-REFUSE-002",
@@ -61,24 +77,16 @@ class DomainPolicyEngine:
             ("內線消息", "未公開資訊", "市場傳聞", "小道消息"),
         ),
         PolicyRule(
+            "POL-REFUSE-006",
+            "prompt_injection",
+            PolicyAction.REFUSE,
+            ("忽略上述", "忽略前述", "system prompt", "系統提示詞", "開發者訊息"),
+        ),
+        PolicyRule(
             "POL-ALLOW-001",
             "app_public_help",
             PolicyAction.ALLOW,
-            (
-                "下載 APP",
-                "下載APP",
-                "APP 要如何下載",
-                "APP如何下載",
-                "APP 怎麼下載",
-                "APP怎麼下載",
-                "更新 APP",
-                "更新APP",
-                "APP 操作",
-                "APP功能",
-                "APP 畫面",
-                "閃退",
-                "錯誤訊息",
-            ),
+            ("國泰證券 App", "國泰證券App", "樹精靈 App", "樹精靈App"),
         ),
         PolicyRule(
             "POL-ALLOW-002",
@@ -90,13 +98,64 @@ class DomainPolicyEngine:
             "POL-ALLOW-003",
             "public_service_information",
             PolicyAction.ALLOW,
-            ("服務時間", "公開費率", "手續費規則", "官方客服", "聯絡方式"),
+            (
+                "服務時間",
+                "交易時間",
+                "交易時段",
+                "公開費率",
+                "手續費規則",
+                "官方客服",
+                "聯絡方式",
+            ),
         ),
         PolicyRule(
             "POL-ALLOW-004",
             "general_securities_knowledge",
             PolicyAction.ALLOW,
-            ("什麼是", "是什麼", "名詞解釋"),
+            (
+                "什麼是",
+                "是什麼",
+                "名詞解釋",
+                "有什麼不一樣",
+                "有何不同",
+                "有什麼不同",
+                "差異在哪",
+                "差在哪",
+                "申請資格",
+                "申請條件",
+                "哪些人可以申請",
+                "誰可以申請",
+                "哪些投資人",
+                "有哪些",
+            ),
+        ),
+        PolicyRule(
+            "POL-ALLOW-005",
+            "order_entry_tutorial",
+            PolicyAction.ALLOW,
+            (
+                "如何下單",
+                "怎麼下單",
+                "下單流程",
+                "下單步驟",
+                "下單操作",
+                "下單畫面",
+            ),
+        ),
+        PolicyRule(
+            "POL-ALLOW-006",
+            "web_public_help",
+            PolicyAction.ALLOW,
+            (
+                "Web 版如何操作",
+                "Web 版要如何操作",
+                "Web 版怎麼操作",
+                "Web 功能",
+                "Web 畫面",
+                "網頁版操作",
+                "網站操作",
+                "網頁錯誤訊息",
+            ),
         ),
     )
 
@@ -115,6 +174,12 @@ class DomainPolicyEngine:
         allow_matches = [rule for rule in matches if rule.action is PolicyAction.ALLOW]
         if len(allow_matches) == 1:
             return self._to_result(allow_matches[0])
+
+        specific_allow_matches = [
+            rule for rule in allow_matches if rule.intent != "general_securities_knowledge"
+        ]
+        if len(specific_allow_matches) == 1:
+            return self._to_result(specific_allow_matches[0])
 
         return PolicyResult(
             action=PolicyAction.REFUSE,
