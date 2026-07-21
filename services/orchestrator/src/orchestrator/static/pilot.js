@@ -6,7 +6,26 @@ const characterCount = document.querySelector("#character-count");
 const clearButton = document.querySelector("#clear-chat");
 const systemState = document.querySelector("#system-state");
 const systemStateText = document.querySelector("#system-state-text");
+const voiceButton = document.querySelector("#voice-button");
+const voiceStatus = document.querySelector("#voice-status");
 const initialMessage = messages.firstElementChild.cloneNode(true);
+const voiceState = {
+  config: null,
+  stream: null,
+  audioContext: null,
+  microphoneSource: null,
+  processor: null,
+  silentGain: null,
+  socket: null,
+  socketPromise: null,
+  socketReady: false,
+  listening: false,
+  continuous: false,
+  replying: false,
+  replyController: null,
+  activeSources: new Set(),
+  partialTranscript: "",
+};
 
 const decisionLabels = {
   answer: "核准知識回答",
@@ -37,9 +56,9 @@ function appendUserMessage(text) {
   scrollToLatest();
 }
 
-function appendLoading() {
+function appendLoading(id = "loading-message") {
   const article = element("article", "message assistant-message");
-  article.id = "loading-message";
+  article.id = id;
   article.append(element("div", "avatar", "知"));
   const content = element("div", "message-content");
   content.append(element("p", "message-label", "知識助手正在查核來源"));
@@ -181,6 +200,354 @@ async function loadSystemState() {
   }
 }
 
+function setVoiceStatus(text) {
+  voiceStatus.textContent = text;
+}
+
+function downsampleToInt16(inputSamples, sourceRate, targetRate = 16000) {
+  const ratio = sourceRate / targetRate;
+  const output = new Int16Array(Math.floor(inputSamples.length / ratio));
+  for (let index = 0; index < output.length; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.max(start + 1, Math.floor((index + 1) * ratio));
+    let total = 0;
+    for (let sourceIndex = start; sourceIndex < end && sourceIndex < inputSamples.length; sourceIndex += 1) {
+      total += inputSamples[sourceIndex];
+    }
+    const sample = Math.max(-1, Math.min(1, total / (end - start)));
+    output[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return output;
+}
+
+async function ensureMicrophone() {
+  if (!voiceState.stream) {
+    voiceState.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  }
+  if (!voiceState.audioContext) {
+    voiceState.audioContext = new AudioContext();
+    voiceState.microphoneSource = voiceState.audioContext.createMediaStreamSource(
+      voiceState.stream,
+    );
+  }
+  await voiceState.audioContext.resume();
+}
+
+function stopRealtimeCapture() {
+  if (voiceState.processor) {
+    try {
+      voiceState.microphoneSource.disconnect(voiceState.processor);
+    } catch {}
+    voiceState.processor.disconnect();
+    voiceState.processor.onaudioprocess = null;
+    voiceState.processor = null;
+  }
+  if (voiceState.silentGain) {
+    voiceState.silentGain.disconnect();
+    voiceState.silentGain = null;
+  }
+}
+
+function stopVoicePlayback() {
+  for (const source of voiceState.activeSources) {
+    try {
+      source.stop();
+    } catch {}
+  }
+  voiceState.activeSources.clear();
+}
+
+function startRealtimeCapture() {
+  stopRealtimeCapture();
+  voiceState.partialTranscript = "";
+  const processor = voiceState.audioContext.createScriptProcessor(2048, 1, 1);
+  const gain = voiceState.audioContext.createGain();
+  gain.gain.value = 0;
+  processor.onaudioprocess = (event) => {
+    if (!voiceState.listening || voiceState.socket?.readyState !== WebSocket.OPEN) return;
+    const pcm = downsampleToInt16(
+      event.inputBuffer.getChannelData(0),
+      voiceState.audioContext.sampleRate,
+    );
+    if (pcm.length) voiceState.socket.send(pcm.buffer);
+  };
+  voiceState.microphoneSource.connect(processor);
+  processor.connect(gain);
+  gain.connect(voiceState.audioContext.destination);
+  voiceState.processor = processor;
+  voiceState.silentGain = gain;
+}
+
+function handleRealtimeAsrEvent(data) {
+  if (data.error) {
+    stopVoiceSession("即時語音辨識發生錯誤，請稍後再試。");
+    return;
+  }
+  if (data.type === "delta") {
+    voiceState.partialTranscript += data.delta || "";
+    const partial = voiceState.partialTranscript.trim();
+    if (partial) setVoiceStatus(`辨識中：${partial.slice(-36)}`);
+    return;
+  }
+  if (data.text && data.is_partial) {
+    voiceState.partialTranscript = data.text.trim();
+    setVoiceStatus(`辨識中：${voiceState.partialTranscript.slice(-36)}`);
+    return;
+  }
+  if (data.type === "candidate_end") {
+    voiceState.partialTranscript = (data.text || voiceState.partialTranscript).trim();
+    setVoiceStatus(
+      data.semantic_complete ? "正在確認你是否說完…" : "句子似乎還沒說完，持續聆聽中…",
+    );
+    return;
+  }
+  if (data.type === "speech_resumed") {
+    setVoiceStatus("偵測到你繼續說話，持續聆聽中…");
+    return;
+  }
+  if (data.type === "noise_rejected") {
+    voiceState.partialTranscript = "";
+    setVoiceStatus("已忽略短暫環境音，持續聆聽中…");
+    return;
+  }
+  if (data.type === "utterance_end" && voiceState.listening) {
+    voiceState.listening = false;
+    stopRealtimeCapture();
+    voiceButton.classList.remove("listening");
+    const transcript = (data.text || voiceState.partialTranscript).trim();
+    void submitVoiceTurn(transcript);
+  }
+}
+
+async function ensureRealtimeAsr() {
+  if (voiceState.socket?.readyState === WebSocket.OPEN && voiceState.socketReady) return;
+  if (voiceState.socketPromise) return voiceState.socketPromise;
+  if (!voiceState.config?.realtime_asr_url || !voiceState.config?.models?.asr) {
+    throw new Error("缺少即時 ASR 設定。");
+  }
+
+  voiceState.socketPromise = new Promise((resolve, reject) => {
+    const socket = new WebSocket(voiceState.config.realtime_asr_url);
+    voiceState.socket = socket;
+    voiceState.socketReady = false;
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        voiceState.socketPromise = null;
+        socket.close();
+        reject(new Error("即時 ASR 模型載入逾時。"));
+      }
+    }, 120000);
+    socket.onopen = () => socket.send(JSON.stringify({
+      model: voiceState.config.models.asr,
+      language: "zh",
+      sample_rate: 16000,
+      streaming: false,
+      semantic_endpointing: true,
+      output_script: "traditional",
+    }));
+    socket.onmessage = (event) => {
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (data.status === "ready") {
+        settled = true;
+        clearTimeout(timeout);
+        voiceState.socketReady = true;
+        voiceState.socketPromise = null;
+        resolve();
+        return;
+      }
+      handleRealtimeAsrEvent(data);
+    };
+    socket.onerror = () => {
+      if (!settled) {
+        voiceState.socketPromise = null;
+        reject(new Error("無法連線到即時 ASR。"));
+      }
+    };
+    socket.onclose = () => {
+      clearTimeout(timeout);
+      voiceState.socketReady = false;
+      voiceState.socketPromise = null;
+      if (!settled) reject(new Error("即時 ASR 連線已關閉。"));
+      else if (voiceState.continuous) stopVoiceSession("即時 ASR 連線已中斷。");
+    };
+  });
+  return voiceState.socketPromise;
+}
+
+async function startVoiceListening() {
+  try {
+    await ensureMicrophone();
+    setVoiceStatus("正在準備即時語音辨識…");
+    await ensureRealtimeAsr();
+    if (!voiceState.continuous) return;
+    voiceState.listening = true;
+    voiceButton.classList.remove("speaking");
+    voiceButton.classList.add("listening");
+    voiceButton.setAttribute("aria-label", "停止即時語音對話");
+    setVoiceStatus("正在聽…自然說完一句話即可");
+    startRealtimeCapture();
+  } catch (error) {
+    stopVoiceSession(`無法啟動語音：${error.message}`);
+  }
+}
+
+function stopVoiceSession(status = "語音對話已停止；按麥克風可重新開始") {
+  voiceState.continuous = false;
+  voiceState.listening = false;
+  voiceState.replying = false;
+  voiceState.replyController?.abort();
+  voiceState.replyController = null;
+  stopRealtimeCapture();
+  stopVoicePlayback();
+  if (voiceState.socket?.readyState === WebSocket.OPEN) {
+    voiceState.socket.send(JSON.stringify({ action: "cancel" }));
+  }
+  voiceButton.classList.remove("listening", "speaking");
+  voiceButton.setAttribute("aria-label", "開始即時語音對話");
+  setVoiceStatus(status);
+}
+
+async function playVoiceResponse(response, signal) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  let nextStartAt = 0;
+  let lastPlayback = Promise.resolve();
+  let turnReceived = false;
+  let audioReceived = false;
+  let ttsFailed = false;
+
+  const handleEvent = async (event) => {
+    if (signal.aborted) throw new DOMException("回覆已中斷。", "AbortError");
+    if (event.type === "turn") {
+      document.querySelector("#voice-loading-message")?.remove();
+      appendAssistantMessage(event.turn);
+      turnReceived = true;
+      setVoiceStatus("文字回答完成，正在產生語音…按麥克風可中斷");
+      return;
+    }
+    if (event.type === "error") {
+      ttsFailed = true;
+      setVoiceStatus(event.detail || "語音合成暫時無法使用。");
+      return;
+    }
+    if (event.type === "audio") {
+      const bytes = Uint8Array.from(atob(event.audio), (char) => char.charCodeAt(0));
+      const audioBuffer = await voiceState.audioContext.decodeAudioData(bytes.buffer.slice(0));
+      const source = voiceState.audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(voiceState.audioContext.destination);
+      const now = voiceState.audioContext.currentTime;
+      const startAt = Math.max(now + 0.12, nextStartAt);
+      nextStartAt = startAt + audioBuffer.duration;
+      lastPlayback = new Promise((resolve) => {
+        source.onended = () => {
+          voiceState.activeSources.delete(source);
+          resolve();
+        };
+      });
+      voiceState.activeSources.add(source);
+      source.start(startAt);
+      audioReceived = true;
+      voiceButton.classList.add("speaking");
+      setVoiceStatus("正在播放語音回答…按麥克風可中斷並繼續說話");
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = pending.split("\n");
+    pending = lines.pop();
+    for (const line of lines) {
+      if (line.trim()) await handleEvent(JSON.parse(line));
+    }
+    if (done) break;
+  }
+  if (pending.trim()) await handleEvent(JSON.parse(pending));
+  if (!turnReceived) throw new Error("沒有收到知識助手回答。");
+  if (!audioReceived && !ttsFailed) throw new Error("沒有收到可播放的語音。");
+  await lastPlayback;
+}
+
+async function submitVoiceTurn(transcript) {
+  if (!transcript) {
+    setVoiceStatus("沒有辨識到語音，請再說一次。");
+    if (voiceState.continuous) await startVoiceListening();
+    return;
+  }
+  appendUserMessage(transcript);
+  appendLoading("voice-loading-message");
+  setVoiceStatus("正在查核核准知識與安全邊界…");
+  voiceState.replying = true;
+  voiceButton.classList.add("speaking");
+  const controller = new AbortController();
+  voiceState.replyController = controller;
+  try {
+    const response = await fetch("/v1/voice/respond-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+      body: JSON.stringify({ transcript }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error("語音回答服務目前無法使用。");
+    await playVoiceResponse(response, controller.signal);
+    setVoiceStatus("本輪完成，正在重新開啟麥克風…");
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      document.querySelector("#voice-loading-message")?.remove();
+      appendNetworkError();
+      stopVoiceSession(`語音處理失敗：${error.message}`);
+      return;
+    }
+  } finally {
+    if (voiceState.replyController === controller) voiceState.replyController = null;
+    voiceState.replying = false;
+    voiceButton.classList.remove("speaking");
+  }
+  if (voiceState.continuous && !controller.signal.aborted) await startVoiceListening();
+}
+
+async function toggleVoiceSession() {
+  if (voiceState.replying) {
+    voiceState.replyController?.abort();
+    stopVoicePlayback();
+    voiceState.replying = false;
+    voiceState.continuous = true;
+    await startVoiceListening();
+    return;
+  }
+  if (voiceState.continuous) {
+    stopVoiceSession();
+    return;
+  }
+  voiceState.continuous = true;
+  await startVoiceListening();
+}
+
+async function loadVoiceConfig() {
+  try {
+    const response = await fetch("/v1/voice/config", { headers: { Accept: "application/json" } });
+    const config = await response.json();
+    if (!config.enabled) return;
+    voiceState.config = config;
+    voiceButton.hidden = false;
+    setVoiceStatus(
+      config.available ? "按麥克風開始即時語音對話" : "語音模型服務尚未就緒",
+    );
+  } catch {
+    setVoiceStatus("無法取得語音服務狀態");
+  }
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const transcript = input.value.trim();
@@ -240,4 +607,6 @@ clearButton.addEventListener("click", () => {
   input.focus();
 });
 
+voiceButton.addEventListener("click", toggleVoiceSession);
 loadSystemState();
+loadVoiceConfig();

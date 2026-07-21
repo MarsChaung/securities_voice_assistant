@@ -27,6 +27,7 @@ from .intent_routing import (
     IntentRouterMode,
     IntentRoutingError,
 )
+from .shadow import ShadowAnswerRunner, ShadowAnswerTask
 
 
 class RuntimeKnowledgeRepository(Protocol):
@@ -56,6 +57,7 @@ class GenerationTrace:
     prompt_version: str | None = None
     prompt_hash: str | None = None
     latency_ms: float | None = None
+    applied: bool = False
     fallback_reason: str | None = None
 
 
@@ -90,6 +92,7 @@ class TurnService:
         answer_mode: AnswerMode | str = AnswerMode.EXACT,
         answer_composer: AnswerComposer | None = None,
         output_guard: ControlledOutputGuard | None = None,
+        shadow_runner: ShadowAnswerRunner | None = None,
         intent_router_mode: IntentRouterMode | str = IntentRouterMode.DISABLED,
         intent_router: IntentRouter | None = None,
         intent_router_minimum_confidence: float = 0.8,
@@ -103,13 +106,16 @@ class TurnService:
         self._answer_mode = AnswerMode(answer_mode)
         self._answer_composer = answer_composer
         self._output_guard = output_guard or ControlledOutputGuard()
+        self._shadow_runner = shadow_runner
         self._intent_router_mode = IntentRouterMode(intent_router_mode)
         self._intent_router = intent_router
         self._intent_router_minimum_confidence = intent_router_minimum_confidence
         self._clock = clock or (lambda: datetime.now(UTC))
 
         if self._answer_mode is AnswerMode.CONTROLLED_LLM and self._answer_composer is None:
-            raise ValueError("controlled_llm answer mode requires an answer composer")
+            raise ValueError("controlled LLM answer mode requires an answer composer")
+        if self._answer_mode is AnswerMode.SHADOW_LLM and self._shadow_runner is None:
+            raise ValueError("shadow LLM answer mode requires a background runner")
         if (
             self._intent_router_mode is not IntentRouterMode.DISABLED
             and self._intent_router is None
@@ -195,6 +201,7 @@ class TurnService:
         else:
             try:
                 outcome = self._answer_from_knowledge(
+                    turn_id=turn_id,
                     request=request,
                     intent=policy_result.intent,
                     policy_rule_id=policy_result.policy_rule_id,
@@ -305,6 +312,7 @@ class TurnService:
     def _answer_from_knowledge(
         self,
         *,
+        turn_id: str,
         request: TurnRequest,
         intent: str,
         policy_rule_id: str,
@@ -364,8 +372,35 @@ class TurnService:
             answer=item.standard_answer,
             confidence=match.score,
         )
+        evidence = AnswerEvidence(
+            standard_answer=item.standard_answer,
+            prohibited_extensions=tuple(item.prohibited_extensions),
+            knowledge_id=item.knowledge_id,
+            knowledge_version=item.version,
+            source_id=source.source_id,
+        )
         if self._answer_mode is AnswerMode.EXACT:
             return KnowledgeAnswerOutcome(result=exact_answer, generation=generation)
+
+        if self._answer_mode is AnswerMode.SHADOW_LLM:
+            if self._shadow_runner is None:
+                return KnowledgeAnswerOutcome(
+                    result=exact_answer,
+                    generation=GenerationTrace(
+                        answer_mode=self._answer_mode.value,
+                        fallback_reason="shadow_runner_unavailable",
+                    ),
+                )
+            submit_status = self._shadow_runner.submit(
+                ShadowAnswerTask(turn_id=turn_id, evidence=evidence)
+            )
+            return KnowledgeAnswerOutcome(
+                result=exact_answer,
+                generation=GenerationTrace(
+                    answer_mode=self._answer_mode.value,
+                    fallback_reason=submit_status.value,
+                ),
+            )
 
         if self._answer_composer is None:
             return KnowledgeAnswerOutcome(
@@ -377,16 +412,7 @@ class TurnService:
             )
 
         try:
-            generated = self._answer_composer.compose(
-                AnswerEvidence(
-                    question=request.transcript,
-                    standard_answer=item.standard_answer,
-                    prohibited_extensions=tuple(item.prohibited_extensions),
-                    knowledge_id=item.knowledge_id,
-                    knowledge_version=item.version,
-                    source_id=source.source_id,
-                )
-            )
+            generated = self._answer_composer.compose(evidence)
         except AnswerGenerationError:
             return KnowledgeAnswerOutcome(
                 result=exact_answer,
@@ -407,6 +433,7 @@ class TurnService:
             prompt_version=generated.prompt_version,
             prompt_hash=generated.prompt_hash,
             latency_ms=generated.latency_ms,
+            applied=output_guard_result.safe,
             fallback_reason=(
                 None
                 if output_guard_result.safe
@@ -452,6 +479,7 @@ class TurnService:
             prompt_version=generation.prompt_version,
             prompt_hash=generation.prompt_hash,
             generation_latency_ms=generation.latency_ms,
+            generation_applied=generation.applied,
             generation_fallback_reason=generation.fallback_reason,
             intent_router_mode=intent_routing.mode,
             intent_router_model_id=intent_routing.model_id,

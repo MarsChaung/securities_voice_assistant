@@ -73,6 +73,18 @@ def test_controlled_generation_can_be_enabled_explicitly() -> None:
     assert isinstance(_build_answer_composer(settings), OpenAICompatibleAnswerComposer)
 
 
+def test_shadow_generation_builds_a_composer_without_changing_the_default() -> None:
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="shadow_llm",
+        answer_llm_model="synthetic-model",
+        intent_router_mode="disabled",
+    )
+
+    assert isinstance(_build_answer_composer(settings), OpenAICompatibleAnswerComposer)
+
+
 def test_intent_router_is_disabled_by_default() -> None:
     assert Settings.model_fields["intent_router_mode"].default == "disabled"
     settings = Settings(
@@ -103,3 +115,24 @@ def test_controlled_intent_router_can_be_enabled_explicitly() -> None:
     )
 
     assert isinstance(_build_intent_router(settings), OpenAICompatibleIntentRouter)
+
+
+def test_voice_mode_requires_asr_and_tts_models() -> None:
+    with pytest.raises(ValidationError, match="SVA_ASR_MODEL"):
+        Settings(
+            database_url="sqlite+pysqlite:///:memory:",
+            retrieval_mode="lexical",
+            voice_enabled=True,
+            asr_model="",
+            tts_model="",
+        )
+
+
+def test_voice_clone_requires_reference_audio_and_text_together() -> None:
+    with pytest.raises(ValidationError, match="SVA_TTS_REF_AUDIO"):
+        Settings(
+            database_url="sqlite+pysqlite:///:memory:",
+            retrieval_mode="lexical",
+            tts_ref_audio="/private/reference.wav",
+            tts_ref_text=None,
+        )

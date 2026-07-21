@@ -24,3 +24,15 @@ SVA_EMBEDDINGS_MODEL=<local-model-id> uv run python -m evals.run_hybrid
 ```
 
 輸出會逐案比較詞彙與混合檢索結果。Embedding 服務無法使用時評測直接失敗，不會以詞彙回退結果冒充混合檢索成績；混合檢索必須通過全部案例且不得低於詞彙基準，否則以非零狀態結束。
+
+## 受控答案生成
+
+生成模型與獨立 judge 必須分開設定：
+
+```bash
+SVA_ANSWER_LLM_MODEL=<generator-model-id> \
+SVA_ANSWER_JUDGE_MODEL=<independent-judge-model-id> \
+uv run python -m evals.run_answer_generation
+```
+
+Runner 先完成全部生成，再執行確定性輸出守門與獨立 groundedness 審查；生成文字只暫存在記憶體，不寫入報表或檔案。任何新增事實、遺漏限制、禁止延伸、格式錯誤或模型故障都使評測失敗。

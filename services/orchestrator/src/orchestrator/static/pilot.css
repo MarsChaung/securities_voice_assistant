@@ -165,13 +165,21 @@ button { cursor: pointer; }
 
 .composer { padding: 16px 20px 19px; border-top: 1px solid var(--line); background: #fbfcfb; }
 .composer > label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-.input-frame { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; padding: 9px 9px 9px 14px; border: 1px solid #c9d5d0; border-radius: 14px; background: white; }
+.input-frame { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: end; padding: 9px 9px 9px 14px; border: 1px solid #c9d5d0; border-radius: 14px; background: white; }
 .input-frame:focus-within { border-color: var(--green); box-shadow: 0 0 0 3px rgb(0 108 82 / 8%); }
 textarea { width: 100%; min-height: 48px; max-height: 140px; padding: 4px 0; resize: none; border: 0; outline: 0; color: var(--ink); line-height: 1.5; }
 textarea::placeholder { color: #98a59f; }
 .input-frame button { height: 42px; padding: 0 14px; display: flex; align-items: center; gap: 12px; border: 0; border-radius: 10px; background: var(--green); color: white; font-size: 12px; font-weight: 750; }
 .input-frame button:hover:not(:disabled) { background: var(--green-2); }
 .input-frame button:disabled { cursor: wait; opacity: .6; }
+.input-frame .voice-button { width: 42px; padding: 0; justify-content: center; border: 1px solid #b9d5cc; background: var(--green-soft); color: var(--green); }
+.input-frame .voice-button:hover:not(:disabled) { background: #d2ebe3; }
+.input-frame .voice-button.listening { border-color: #c66767; background: var(--red-soft); color: var(--red); animation: voice-pulse 1.4s ease-in-out infinite; }
+.input-frame .voice-button.speaking { border-color: #d5a64e; background: var(--amber-soft); color: var(--amber); }
+.mic-icon { position: relative; width: 13px; height: 18px; display: block; border: 2px solid currentColor; border-radius: 8px; }
+.mic-icon::before { content: ""; position: absolute; width: 19px; height: 10px; left: -5px; bottom: -6px; border: 2px solid currentColor; border-top: 0; border-radius: 0 0 10px 10px; }
+.mic-icon::after { content: ""; position: absolute; width: 2px; height: 5px; left: 4px; bottom: -10px; background: currentColor; box-shadow: -4px 5px 0 -1px currentColor, 4px 5px 0 -1px currentColor; }
+@keyframes voice-pulse { 50% { box-shadow: 0 0 0 7px rgb(146 60 60 / 10%); } }
 .composer-meta { margin-top: 7px; display: flex; justify-content: space-between; color: #89968f; font-size: 9px; }
 
 @media (max-width: 900px) {

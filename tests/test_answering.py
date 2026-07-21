@@ -13,7 +13,6 @@ from orchestrator.answering import (
 
 def evidence() -> AnswerEvidence:
     return AnswerEvidence(
-        question="美股交割幣別有哪些？",
         standard_answer="美股交易可依官方規則使用新臺幣或美元交割。",
         prohibited_extensions=("不得查詢個人帳戶餘額",),
         knowledge_id="K-CATHAY-US-002",
@@ -29,10 +28,14 @@ def test_openai_compatible_answer_composer_uses_structured_grounded_prompt() -> 
         body = json.loads(request.read())
         assert body["model"] == "synthetic-model"
         assert body["temperature"] == 0
-        assert body["response_format"] == {"type": "json_object"}
+        assert body["response_format"]["type"] == "json_schema"
+        assert body["response_format"]["json_schema"]["strict"] is True
+        schema = body["response_format"]["json_schema"]["schema"]
+        assert schema["additionalProperties"] is False
         user_payload = json.loads(body["messages"][1]["content"])
         assert user_payload["knowledge_id"] == "K-CATHAY-US-002"
         assert user_payload["standard_answer"] == evidence().standard_answer
+        assert "question" not in user_payload
         return httpx.Response(
             200,
             json={
@@ -60,7 +63,7 @@ def test_openai_compatible_answer_composer_uses_structured_grounded_prompt() -> 
 
     assert result.answer == "簡單說，美股可用新臺幣或美元交割。"
     assert result.model_id == "synthetic-model"
-    assert result.prompt_version == "controlled-answer-v1"
+    assert result.prompt_version == "controlled-answer-v4"
     assert len(result.prompt_hash) == 64
     assert result.latency_ms >= 0
 

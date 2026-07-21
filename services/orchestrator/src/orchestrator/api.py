@@ -1,10 +1,19 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
 from answer_contract import TurnFeedback, TurnRequest, TurnResponse
@@ -20,6 +29,8 @@ from .answering import OpenAICompatibleAnswerComposer
 from .config import Settings, get_settings
 from .intent_routing import OpenAICompatibleIntentRouter
 from .service import TurnService
+from .shadow import ThreadedShadowAnswerRunner
+from .voice import VoiceReplyRequest, VoiceService, ndjson_event, realtime_asr_url
 
 _PACKAGE_ROOT = Path(__file__).parent
 
@@ -54,7 +65,7 @@ def _build_knowledge_retriever(
 
 
 def _build_answer_composer(settings: Settings) -> OpenAICompatibleAnswerComposer | None:
-    if settings.answer_mode != "controlled_llm":
+    if settings.answer_mode not in {"shadow_llm", "controlled_llm"}:
         return None
 
     return OpenAICompatibleAnswerComposer(
@@ -81,25 +92,68 @@ def create_app(
     *,
     service: TurnService | None = None,
     settings: Settings | None = None,
+    voice_service: VoiceService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level)
-    resolved_service = service or TurnService(
-        knowledge_repository=SqlKnowledgeRepository.from_url(resolved_settings.database_url),
-        knowledge_retriever=_build_knowledge_retriever(resolved_settings),
-        answer_mode=resolved_settings.answer_mode,
-        answer_composer=_build_answer_composer(resolved_settings),
-        intent_router_mode=resolved_settings.intent_router_mode,
-        intent_router=_build_intent_router(resolved_settings),
-        intent_router_minimum_confidence=(
-            resolved_settings.intent_router_minimum_confidence
-        ),
-    )
+    shadow_runner: ThreadedShadowAnswerRunner | None = None
+    if service is None:
+        answer_composer = _build_answer_composer(resolved_settings)
+        if resolved_settings.answer_mode == "shadow_llm" and answer_composer is not None:
+            shadow_runner = ThreadedShadowAnswerRunner(
+                composer=answer_composer,
+                max_pending=resolved_settings.shadow_max_pending,
+            )
+        resolved_service = TurnService(
+            knowledge_repository=SqlKnowledgeRepository.from_url(
+                resolved_settings.database_url
+            ),
+            knowledge_retriever=_build_knowledge_retriever(resolved_settings),
+            answer_mode=resolved_settings.answer_mode,
+            answer_composer=(
+                answer_composer
+                if resolved_settings.answer_mode == "controlled_llm"
+                else None
+            ),
+            shadow_runner=shadow_runner,
+            intent_router_mode=resolved_settings.intent_router_mode,
+            intent_router=_build_intent_router(resolved_settings),
+            intent_router_minimum_confidence=(
+                resolved_settings.intent_router_minimum_confidence
+            ),
+        )
+    else:
+        resolved_service = service
+    resolved_voice_service = voice_service
+    if resolved_voice_service is None and resolved_settings.voice_enabled:
+        resolved_voice_service = VoiceService(
+            audio_base_url=str(resolved_settings.tts_base_url),
+            audio_public_base_url=str(resolved_settings.audio_public_base_url),
+            asr_model=resolved_settings.asr_model or "",
+            tts_model=resolved_settings.tts_model or "",
+            tts_voice=resolved_settings.tts_voice,
+            tts_ref_audio=resolved_settings.tts_ref_audio,
+            tts_ref_text=(
+                resolved_settings.tts_ref_text.get_secret_value()
+                if resolved_settings.tts_ref_text
+                else None
+            ),
+            timeout_seconds=resolved_settings.voice_timeout_seconds,
+        )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        if shadow_runner is not None:
+            shadow_runner.close()
+        if resolved_voice_service is not None:
+            await resolved_voice_service.close()
 
     app = FastAPI(
         title="Securities Voice Assistant Orchestrator",
-        version="0.5.0",
+        version="0.7.0",
         description="證券知識型語音客服的安全決策與核准知識檢索 API",
+        lifespan=lifespan,
     )
     app.mount(
         "/pilot/static",
@@ -133,6 +187,7 @@ def create_app(
                 "retrieval_mode": resolved_settings.retrieval_mode,
                 "answer_mode": resolved_settings.answer_mode,
                 "intent_router_mode": resolved_settings.intent_router_mode,
+                "voice_enabled": resolved_voice_service is not None,
             },
             status_code=status_code,
         )
@@ -145,6 +200,51 @@ def create_app(
     def record_feedback(turn_id: UUID, feedback: TurnFeedback) -> Response:
         resolved_service.record_feedback(turn_id=str(turn_id), rating=feedback.rating)
         return Response(status_code=204)
+
+    @app.get("/v1/voice/config")
+    async def voice_config() -> Response:
+        if resolved_voice_service is None:
+            return JSONResponse({"enabled": False, "available": False})
+        return JSONResponse(
+            {
+                "enabled": True,
+                "available": await resolved_voice_service.available(),
+                "realtime_asr_url": realtime_asr_url(
+                    resolved_voice_service.audio_public_base_url
+                ),
+                "models": {
+                    "asr": resolved_voice_service.models.asr,
+                    "tts": resolved_voice_service.models.tts,
+                    "voice": resolved_voice_service.models.voice,
+                    "voice_clone": resolved_voice_service.voice_clone_enabled,
+                },
+            }
+        )
+
+    @app.post("/v1/voice/respond-stream")
+    async def voice_respond(request: VoiceReplyRequest) -> StreamingResponse:
+        if resolved_voice_service is None:
+            raise HTTPException(503, "語音服務目前未啟用。")
+        turn = await run_in_threadpool(
+            resolved_service.evaluate,
+            TurnRequest(transcript=request.transcript, channel="web"),
+        )
+
+        async def stream() -> AsyncIterator[bytes]:
+            yield ndjson_event(
+                {"type": "turn", "turn": turn.model_dump(mode="json")}
+            )
+            async for event in resolved_voice_service.stream_answer(
+                turn_id=turn.turn_id,
+                answer=turn.result.answer,
+            ):
+                yield event
+
+        return StreamingResponse(
+            stream(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-store"},
+        )
 
     return app
 

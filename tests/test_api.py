@@ -17,6 +17,7 @@ from orchestrator.intent_routing import (
     IntentRoutingError,
 )
 from orchestrator.service import TurnService
+from orchestrator.shadow import ShadowAnswerTask, ShadowSubmitStatus
 from retrieval import (
     HybridKnowledgeRetriever,
     KnowledgeDocument,
@@ -65,10 +66,22 @@ class StaticAnswerComposer:
         return GeneratedAnswer(
             answer=self.answer or evidence.standard_answer,
             model_id="synthetic-model",
-            prompt_version="controlled-answer-v1",
+            prompt_version="controlled-answer-v4",
             prompt_hash="a" * 64,
             latency_ms=12.5,
         )
+
+
+class CapturingShadowRunner:
+    def __init__(self) -> None:
+        self.tasks: list[ShadowAnswerTask] = []
+
+    def submit(self, task: ShadowAnswerTask) -> ShadowSubmitStatus:
+        self.tasks.append(task)
+        return ShadowSubmitStatus.QUEUED
+
+    def close(self) -> None:
+        return None
 
 
 class StaticIntentRouter:
@@ -342,6 +355,36 @@ def test_controlled_generation_error_falls_back_to_exact_approved_answer() -> No
     assert response.json()["result"]["answer"] == document.item.standard_answer
 
 
+def test_shadow_generation_never_changes_the_approved_answer(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    document = published_document()
+    runner = CapturingShadowRunner()
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        answer_mode="shadow_llm",
+        shadow_runner=runner,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    with caplog.at_level(logging.INFO, logger="sva.audit"):
+        response = make_client(service).post(
+            "/v1/turns/evaluate",
+            json={"transcript": "什麼是台股定期定額？", "channel": "web"},
+        )
+
+    event_record = next(record for record in caplog.records if "turn_decision" in record.message)
+    event = json.loads(event_record.getMessage().removeprefix("turn_decision "))
+    assert response.json()["result"]["answer"] == document.item.standard_answer
+    assert event["answer_mode"] == "shadow_llm"
+    assert event["generation_applied"] is False
+    assert event["generation_fallback_reason"] == "shadow_queued"
+    assert len(runner.tasks) == 1
+    assert runner.tasks[0].turn_id == response.json()["turn_id"]
+    assert runner.tasks[0].evidence.standard_answer == document.item.standard_answer
+    assert not hasattr(runner.tasks[0].evidence, "question")
+
+
 def test_output_guard_failure_falls_back_and_records_only_safe_metadata(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -365,6 +408,7 @@ def test_output_guard_failure_falls_back_and_records_only_safe_metadata(
     assert response.json()["result"]["answer"] == document.item.standard_answer
     assert event["answer_mode"] == "controlled_llm"
     assert event["generation_model_id"] == "synthetic-model"
+    assert event["generation_applied"] is False
     assert event["generation_fallback_reason"] == "output_guard:unsupported_number"
     assert unsafe_answer not in caplog.text
 

@@ -95,13 +95,22 @@
               placeholder="例如：什麼是台股定期定額？"
               required
             ></textarea>
+            <button
+              class="voice-button"
+              id="voice-button"
+              type="button"
+              aria-label="開始即時語音對話"
+              hidden
+            >
+              <span class="mic-icon" aria-hidden="true"></span>
+            </button>
             <button id="send-button" type="submit">
               <span>送出</span>
               <span aria-hidden="true">↑</span>
             </button>
           </div>
           <div class="composer-meta">
-            <span>按 ⌘／Ctrl + Enter 送出</span>
+            <span id="voice-status">按 ⌘／Ctrl + Enter 送出</span>
             <span><output id="character-count">0</output> / 4000</span>
           </div>
         </form>

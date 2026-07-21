@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 
 @dataclass(frozen=True)
 class TurnDecisionEvent:
-    schema_version: str = field(init=False, default="1.3")
+    schema_version: str = field(init=False, default="1.4")
     turn_id: str
     decision: str
     intent: str
@@ -24,6 +24,7 @@ class TurnDecisionEvent:
     prompt_version: str | None = None
     prompt_hash: str | None = None
     generation_latency_ms: float | None = None
+    generation_applied: bool = False
     generation_fallback_reason: str | None = None
     intent_router_mode: str = "disabled"
     intent_router_model_id: str | None = None
@@ -42,6 +43,33 @@ class TurnFeedbackEvent:
     schema_version: str = field(init=False, default="1.0")
     turn_id: str
     rating: str
+
+
+@dataclass(frozen=True)
+class ShadowGenerationEvent:
+    schema_version: str = field(init=False, default="1.0")
+    turn_id: str
+    answer_id: str
+    knowledge_version: str
+    source_id: str
+    generation_model_id: str | None
+    prompt_version: str | None
+    prompt_hash: str | None
+    generation_latency_ms: float | None
+    output_guard_safe: bool
+    fallback_reason: str
+
+
+@dataclass(frozen=True)
+class VoiceSynthesisEvent:
+    schema_version: str = field(init=False, default="1.0")
+    turn_id: str
+    tts_model_id: str
+    sentence_count: int
+    audio_chunk_count: int
+    first_audio_latency_ms: float | None
+    total_latency_ms: float
+    error_type: str | None
 
 
 class SafeAuditLogger:
@@ -71,6 +99,7 @@ class SafeAuditLogger:
         prompt_version: str | None = None,
         prompt_hash: str | None = None,
         generation_latency_ms: float | None = None,
+        generation_applied: bool = False,
         generation_fallback_reason: str | None = None,
         intent_router_mode: str = "disabled",
         intent_router_model_id: str | None = None,
@@ -106,6 +135,7 @@ class SafeAuditLogger:
                 if generation_latency_ms is not None
                 else None
             ),
+            generation_applied=generation_applied,
             generation_fallback_reason=generation_fallback_reason,
             intent_router_mode=intent_router_mode,
             intent_router_model_id=intent_router_model_id,
@@ -127,3 +157,61 @@ class SafeAuditLogger:
     def turn_feedback(self, *, turn_id: str, rating: str) -> None:
         event = TurnFeedbackEvent(turn_id=turn_id, rating=rating)
         self._logger.info("turn_feedback %s", json.dumps(asdict(event), ensure_ascii=False))
+
+    def shadow_generation(
+        self,
+        *,
+        turn_id: str,
+        answer_id: str,
+        knowledge_version: str,
+        source_id: str,
+        output_guard_safe: bool,
+        fallback_reason: str,
+        generation_model_id: str | None = None,
+        prompt_version: str | None = None,
+        prompt_hash: str | None = None,
+        generation_latency_ms: float | None = None,
+    ) -> None:
+        event = ShadowGenerationEvent(
+            turn_id=turn_id,
+            answer_id=answer_id,
+            knowledge_version=knowledge_version,
+            source_id=source_id,
+            generation_model_id=generation_model_id,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            generation_latency_ms=(
+                round(generation_latency_ms, 3)
+                if generation_latency_ms is not None
+                else None
+            ),
+            output_guard_safe=output_guard_safe,
+            fallback_reason=fallback_reason,
+        )
+        self._logger.info("shadow_generation %s", json.dumps(asdict(event), ensure_ascii=False))
+
+    def voice_synthesis(
+        self,
+        *,
+        turn_id: str,
+        tts_model_id: str,
+        sentence_count: int,
+        audio_chunk_count: int,
+        first_audio_latency_ms: float | None,
+        total_latency_ms: float,
+        error_type: str | None,
+    ) -> None:
+        event = VoiceSynthesisEvent(
+            turn_id=turn_id,
+            tts_model_id=tts_model_id,
+            sentence_count=sentence_count,
+            audio_chunk_count=audio_chunk_count,
+            first_audio_latency_ms=(
+                round(first_audio_latency_ms, 3)
+                if first_audio_latency_ms is not None
+                else None
+            ),
+            total_latency_ms=round(total_latency_ms, 3),
+            error_type=error_type,
+        )
+        self._logger.info("voice_synthesis %s", json.dumps(asdict(event), ensure_ascii=False))

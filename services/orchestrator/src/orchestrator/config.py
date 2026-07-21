@@ -31,23 +31,38 @@ class Settings(BaseSettings):
     knowledge_admin_url: HttpUrl = HttpUrl("http://127.0.0.1:8081/admin/knowledge")
     llm_base_url: HttpUrl = HttpUrl("http://127.0.0.1:12345/v1")
     llm_api_key: SecretStr | None = None
-    answer_mode: Literal["exact", "controlled_llm", "fixed_message"] = "exact"
+    answer_mode: Literal["exact", "shadow_llm", "controlled_llm", "fixed_message"] = "exact"
     answer_llm_model: str | None = None
     answer_llm_timeout_seconds: float = Field(default=8.0, gt=0)
+    shadow_max_pending: int = Field(default=8, ge=1, le=100)
+    answer_judge_model: str | None = None
+    answer_judge_timeout_seconds: float = Field(default=15.0, gt=0)
     intent_router_mode: Literal["disabled", "shadow", "controlled"] = "disabled"
     intent_llm_model: str | None = None
     intent_llm_timeout_seconds: float = Field(default=8.0, gt=0)
     intent_router_minimum_confidence: float = Field(default=0.8, ge=0, le=1)
+    voice_enabled: bool = False
     tts_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000/v1")
+    audio_public_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000/v1")
+    asr_model: str | None = None
+    tts_model: str | None = None
+    tts_voice: str = "Vivian"
+    tts_ref_audio: str | None = None
+    tts_ref_text: SecretStr | None = None
+    voice_timeout_seconds: float = Field(default=180.0, gt=0)
 
     @model_validator(mode="after")
     def require_embedding_model_for_hybrid_mode(self) -> "Settings":
         if self.retrieval_mode == "hybrid" and not self.embeddings_model:
             raise ValueError("hybrid retrieval 必須設定 SVA_EMBEDDINGS_MODEL")
-        if self.answer_mode == "controlled_llm" and not self.answer_llm_model:
-            raise ValueError("controlled_llm answer mode 必須設定 SVA_ANSWER_LLM_MODEL")
+        if self.answer_mode in {"shadow_llm", "controlled_llm"} and not self.answer_llm_model:
+            raise ValueError("LLM answer mode 必須設定 SVA_ANSWER_LLM_MODEL")
         if self.intent_router_mode != "disabled" and not self.intent_llm_model:
             raise ValueError("啟用 intent router 必須設定 SVA_INTENT_LLM_MODEL")
+        if self.voice_enabled and (not self.asr_model or not self.tts_model):
+            raise ValueError("啟用語音功能必須設定 SVA_ASR_MODEL 與 SVA_TTS_MODEL")
+        if bool(self.tts_ref_audio) != bool(self.tts_ref_text):
+            raise ValueError("voice clone 必須同時設定 SVA_TTS_REF_AUDIO 與 SVA_TTS_REF_TEXT")
         return self
 
 
