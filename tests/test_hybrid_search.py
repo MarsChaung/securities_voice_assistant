@@ -9,6 +9,8 @@ from retrieval import (
     KnowledgeDocument,
     LexicalKnowledgeRetriever,
     LocalKnowledgeRepository,
+    QuestionVariant,
+    QuestionVariantUsage,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -32,6 +34,8 @@ class SyntheticEmbeddingProvider:
 
     @staticmethod
     def _vector(text: str) -> tuple[float, ...]:
+        if "阿發口語問法七七" in text:
+            return (0.0, 0.0, 1.0)
         if "記錄股票買賣" in text or "證券帳戶與銀行交割帳戶的差別" in text:
             return (1.0, 0.0, 0.0)
         if "無關的合成問題" in text:
@@ -42,6 +46,18 @@ class SyntheticEmbeddingProvider:
 class FailingEmbeddingProvider:
     def embed(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
         raise EmbeddingServiceError("synthetic provider failure")
+
+
+class FailSecondBatchEmbeddingProvider(SyntheticEmbeddingProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_enabled = True
+
+    def embed(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
+        if self.failure_enabled and len(self.calls) == 1:
+            self.calls.append(tuple(texts))
+            raise EmbeddingServiceError("synthetic second batch failure")
+        return super().embed(texts)
 
 
 def test_hybrid_retrieval_recovers_semantic_paraphrase_and_caches_documents() -> None:
@@ -69,8 +85,31 @@ def test_hybrid_retrieval_recovers_semantic_paraphrase_and_caches_documents() ->
     assert first_match is not None
     assert first_match.document.item.knowledge_id == "K-CATHAY-NEWBIE-001"
     assert second_match is not None
-    assert len(embedder.calls[0]) > 1
-    assert embedder.calls[1] == (query,)
+    assert all(len(call) <= 8 for call in embedder.calls[:-2])
+    assert embedder.calls[-2:] == [(query,), (query,)]
+
+
+def test_document_warmup_keeps_successful_batches_after_later_failure() -> None:
+    embedder = FailSecondBatchEmbeddingProvider()
+    retriever = HybridKnowledgeRetriever(embedder=embedder)
+    source_documents = documents()
+    representation_count = sum(
+        1
+        + sum(
+            variant.usage is QuestionVariantUsage.RETRIEVAL
+            for variant in document.item.question_variants
+        )
+        for document in source_documents
+    )
+
+    with pytest.raises(EmbeddingServiceError, match="second batch failure"):
+        retriever.warm(source_documents)
+
+    embedder.failure_enabled = False
+    warmed = retriever.warm(source_documents)
+
+    assert warmed == representation_count - 8
+    assert len(embedder.calls[0]) == 8
 
 
 def test_hybrid_retrieval_falls_back_to_lexical_when_embedding_service_fails() -> None:
@@ -96,6 +135,36 @@ def test_embedding_failure_does_not_apply_the_lower_hybrid_threshold_to_lexical_
     )
 
     assert match is None
+
+
+def test_embedding_fallback_ignores_conversational_prefix_for_faq_match() -> None:
+    base_document = documents()[0]
+    faq_document = KnowledgeDocument(
+        item=base_document.item.model_copy(
+            update={
+                "title": "線上開戶申請資格",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="account-opening-qualification",
+                        question_text="線上開戶資格是什麼",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base_document.source,
+    )
+
+    match = HybridKnowledgeRetriever(
+        embedder=FailingEmbeddingProvider()
+    ).search(
+        query="如果我想線上開戶，資格是什麼",
+        intent="account_opening_general",
+        documents=(faq_document,),
+    )
+
+    assert match is not None
 
 
 def test_hybrid_retrieval_can_disable_fallback_for_offline_evaluation() -> None:
@@ -138,5 +207,42 @@ def test_hybrid_retrieval_applies_model_specific_prefixes() -> None:
         documents=documents(),
     )
 
-    assert embedder.calls[0][0] == "query: 什麼是證券帳戶？"
-    assert all(text.startswith("passage: ") for text in embedder.calls[0][1:])
+    assert embedder.calls[-1] == ("query: 什麼是證券帳戶？",)
+    assert all(
+        text.startswith("passage: ")
+        for call in embedder.calls[:-1]
+        for text in call
+    )
+
+
+def test_hybrid_retrieval_embeds_runtime_variants_as_separate_representations() -> None:
+    embedder = SyntheticEmbeddingProvider()
+    base_document = documents()[0]
+    item = base_document.item.model_copy(
+        update={
+            "question_variants": [
+                QuestionVariant(
+                    variant_id="runtime",
+                    question_text="阿發口語問法七七",
+                    usage=QuestionVariantUsage.RETRIEVAL,
+                ),
+                QuestionVariant(
+                    variant_id="evaluation",
+                    question_text="阿發評測問法八八",
+                    usage=QuestionVariantUsage.EVALUATION_ONLY,
+                ),
+            ]
+        }
+    )
+    document = KnowledgeDocument(item=item, source=base_document.source)
+
+    match = HybridKnowledgeRetriever(embedder=embedder).search(
+        query="阿發口語問法七七",
+        intent=item.allowed_intents[0],
+        documents=(document,),
+    )
+
+    assert match is not None
+    embedded_texts = tuple(text for call in embedder.calls for text in call)
+    assert "阿發口語問法七七" in embedded_texts
+    assert "阿發評測問法八八" not in embedded_texts

@@ -17,14 +17,30 @@
   ],
   "properties": {
     "source_id": {"type": "string", "pattern": "^SRC-[A-Z0-9-]+$"},
-    "supplied_url": {"type": "string", "format": "uri"},
-    "canonical_url": {"type": "string", "format": "uri"},
+    "supplied_url": {"type": ["string", "null"], "format": "uri"},
+    "canonical_url": {"type": ["string", "null"], "format": "uri"},
     "title": {"type": "string", "minLength": 1},
     "publisher": {"type": "string", "minLength": 1},
-    "source_type": {"const": "official_web"},
+    "source_type": {
+      "enum": ["official_web", "approved_internal_faq", "local_import"]
+    },
     "retrieved_at": {"type": "string", "format": "date-time"},
     "topics": {"type": "array", "minItems": 1, "items": {"type": "string"}},
     "status": {"enum": ["active", "inaccessible", "retired"]},
     "notes": {"type": ["string", "null"]}
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"source_type": {"not": {"const": "local_import"}}},
+        "required": ["source_type"]
+      },
+      "then": {
+        "properties": {
+          "supplied_url": {"type": "string", "format": "uri", "minLength": 1},
+          "canonical_url": {"type": "string", "format": "uri", "minLength": 1}
+        }
+      }
+    }
+  ]
 }

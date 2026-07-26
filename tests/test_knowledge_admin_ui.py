@@ -9,6 +9,11 @@ from knowledge_admin.repository import (
     DatabaseKnowledgeRepository,
     GovernancePayload,
 )
+from observability import (
+    DatabaseShadowReviewRepository,
+    ShadowReviewInput,
+    ShadowReviewStatus,
+)
 
 ORIGIN_HEADERS = {"Origin": "http://testserver"}
 
@@ -30,6 +35,28 @@ def make_client(repository: DatabaseKnowledgeRepository) -> TestClient:
 
 def actor(actor_id: str, role: KnowledgeRole) -> GovernanceActor:
     return GovernanceActor(actor_id=actor_id, roles=frozenset({role}))
+
+
+def seed_shadow_result(repository: DatabaseKnowledgeRepository) -> str:
+    result = DatabaseShadowReviewRepository(repository.engine).record(
+        ShadowReviewInput(
+            turn_id="turn-shadow-ui",
+            knowledge_id="K-CATHAY-US-003",
+            knowledge_version="1.1",
+            source_id="SRC-CATHAY-USSTOCK-001",
+            standard_answer="美股交易時間會因夏令與冬令時間不同而改變。",
+            prohibited_extensions=("不得保證固定成交時間",),
+            generated_answer="簡單說，美股交易時段會依夏令與冬令時間調整。",
+            generation_model_id="Qwen3.6-35B-A3B-oQ4",
+            prompt_version="controlled-answer-v4",
+            prompt_hash="a" * 64,
+            generation_latency_ms=1250.0,
+            output_guard_safe=True,
+            fallback_reason="shadow_only",
+        ),
+        now=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+    return result.shadow_id
 
 
 def publish_overdue_item(repository: DatabaseKnowledgeRepository) -> None:
@@ -123,6 +150,85 @@ def test_knowledge_detail_preserves_source_and_restrictions(
     assert "草稿" in response.text
     assert "送交審核" in response.text
     assert "複審到期時間" in response.text
+    assert "問句變體" in response.text
+    assert "儲存問句變體" in response.text
+
+
+def test_draft_question_variants_can_be_managed_from_ui(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    client = make_client(knowledge_store)
+    created = client.post(
+        "/admin/knowledge/K-CATHAY-DCA-001/question-variants",
+        data={
+            "actor_id": "Codex-assisted draft import",
+            "expected_version": "1",
+            "new_question_texts": "什麼是台股定期定額？\n每月固定買台股是什麼？",
+            "new_variant_usage": "retrieval",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    current = knowledge_store.get_item("K-CATHAY-DCA-001")
+    assert len(current.item.question_variants) == 2
+    first, second = current.item.question_variants
+
+    edited = client.post(
+        "/admin/knowledge/K-CATHAY-DCA-001/question-variants",
+        data={
+            "actor_id": "Codex-assisted draft import",
+            "expected_version": str(current.row_version),
+            "variant_id": [first.variant_id, second.variant_id],
+            "question_text": ["台股定期定額有哪些特色？", second.question_text],
+            "variant_usage": ["evaluation_only", "retrieval"],
+            "delete_variant_id": second.variant_id,
+            "new_question_texts": "",
+            "new_variant_usage": "retrieval",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert edited.status_code == 303
+    revised = knowledge_store.get_item("K-CATHAY-DCA-001")
+    assert len(revised.item.question_variants) == 1
+    assert revised.item.question_variants[0].question_text == "台股定期定額有哪些特色？"
+    assert revised.item.question_variants[0].usage.value == "evaluation_only"
+    detail = client.get(edited.headers["location"])
+    assert "問句變體已儲存" in detail.text
+    assert "台股定期定額有哪些特色？" in detail.text
+    search = client.get(
+        "/admin/knowledge",
+        params={"q": "台股定期定額有哪些特色"},
+    )
+    assert "台股定期定額的基本概念" in search.text
+
+
+def test_draft_title_and_standard_answer_can_be_edited_from_ui(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    client = make_client(knowledge_store)
+    response = client.post(
+        "/admin/knowledge/K-CATHAY-DCA-001/content",
+        data={
+            "actor_id": "Codex-assisted draft import",
+            "expected_version": "1",
+            "title": "台股定期定額完整說明",
+            "standard_answer": "這是一段經人工編輯、等待審核的標準答案。",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    current = knowledge_store.get_item("K-CATHAY-DCA-001")
+    assert current.item.title == "台股定期定額完整說明"
+    assert current.item.standard_answer == "這是一段經人工編輯、等待審核的標準答案。"
+    detail = client.get(response.headers["location"])
+    assert "標題與標準答案已儲存" in detail.text
+    assert "這是一段經人工編輯、等待審核的標準答案。" in detail.text
 
 
 def test_overdue_published_item_can_start_revision_from_ui(
@@ -264,3 +370,76 @@ def test_healthz_checks_database(knowledge_store: DatabaseKnowledgeRepository) -
         "database": "connected",
         "identity_mode": "development",
     }
+
+
+def test_shadow_workbench_lists_and_compares_results(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    shadow_id = seed_shadow_result(knowledge_store)
+    client = make_client(knowledge_store)
+
+    result_list = client.get("/admin/shadow")
+    detail = client.get(f"/admin/shadow/{shadow_id}")
+
+    assert result_list.status_code == 200
+    assert "Shadow 複核工作台" in result_list.text
+    assert "美股一般交易時段" in result_list.text
+    assert "待複核" in result_list.text
+    assert "1250 ms" in result_list.text
+    assert detail.status_code == 200
+    assert "核准標準答案" in detail.text
+    assert "模型改寫答案" in detail.text
+    assert "完成複核" in detail.text
+    assert "美股交易時段會依夏令與冬令時間調整" in detail.text
+    assert "原始問句" not in detail.text
+
+
+def test_shadow_review_submission_is_persisted(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    shadow_id = seed_shadow_result(knowledge_store)
+    client = make_client(knowledge_store)
+
+    response = client.post(
+        f"/admin/shadow/{shadow_id}/review",
+        data={
+            "actor_id": "reviewer.dev",
+            "label": "acceptable",
+            "expected_version": "1",
+            "note": "語意完整且沒有新增內容",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    reviewed = DatabaseShadowReviewRepository(knowledge_store.engine).get_result(shadow_id)
+    assert reviewed.review_status is ShadowReviewStatus.ACCEPTED
+    detail = client.get(response.headers["location"])
+    assert "Shadow 複核已完成" in detail.text
+    assert "人工複核結果" in detail.text
+    assert "語意完整且沒有新增內容" in detail.text
+
+
+def test_shadow_review_note_rejects_sensitive_data(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    shadow_id = seed_shadow_result(knowledge_store)
+    client = make_client(knowledge_store)
+
+    response = client.post(
+        f"/admin/shadow/{shadow_id}/review",
+        data={
+            "actor_id": "reviewer.dev",
+            "label": "other",
+            "expected_version": "1",
+            "note": "客戶手機 0912-345-678",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+    result = DatabaseShadowReviewRepository(knowledge_store.engine).get_result(shadow_id)
+    assert result.review_status is ShadowReviewStatus.PENDING

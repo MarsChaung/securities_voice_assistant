@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Shadow 複核{% endblock %}
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">SHADOW REVIEW</p>
+      <h1>Shadow 複核工作台</h1>
+      <p>比較核准答案與模型改寫，累積是否可開放受控生成的人工評測證據。</p>
+    </div>
+    <div class="total"><strong>{{ metrics.pending }}</strong><span>筆待複核</span></div>
+  </section>
+
+  <section class="metrics shadow-metrics" aria-label="Shadow 複核統計">
+    <a class="metric {% if selected_status is none %}active{% endif %}" href="/admin/shadow">
+      <span>全部結果</span><strong>{{ metrics.total }}</strong>
+    </a>
+    <a class="metric {% if selected_status and selected_status.value == 'pending' %}active{% endif %}" href="/admin/shadow?status=pending">
+      <span>待複核</span><strong>{{ metrics.pending }}</strong>
+    </a>
+    <a class="metric {% if selected_status and selected_status.value == 'accepted' %}active{% endif %}" href="/admin/shadow?status=accepted">
+      <span>可接受</span><strong>{{ metrics.accepted }}</strong>
+    </a>
+    <a class="metric {% if selected_status and selected_status.value == 'rejected' %}active{% endif %}" href="/admin/shadow?status=rejected">
+      <span>不採用</span><strong>{{ metrics.rejected }}</strong>
+    </a>
+    <a class="metric {% if selected_status and selected_status.value == 'not_reviewable' %}active{% endif %}" href="/admin/shadow?status=not_reviewable">
+      <span>無法產生</span><strong>{{ metrics.not_reviewable }}</strong>
+    </a>
+  </section>
+
+  <section class="report-strip" aria-label="Shadow 品質摘要">
+    <div><span>人工接受率</span><strong>{% if metrics.acceptance_rate is not none %}{{ '%.1f'|format(metrics.acceptance_rate * 100) }}%{% else %}尚無資料{% endif %}</strong></div>
+    <div><span>輸出守門通過</span><strong>{{ metrics.output_guard_safe }}</strong></div>
+    <div><span>輸出守門阻擋</span><strong>{{ metrics.output_guard_blocked }}</strong></div>
+    <div><span>平均生成延遲</span><strong>{% if metrics.average_latency_ms is not none %}{{ '%.0f'|format(metrics.average_latency_ms) }} ms{% else %}尚無資料{% endif %}</strong></div>
+    <div><span>P95 生成延遲</span><strong>{% if metrics.p95_latency_ms is not none %}{{ '%.0f'|format(metrics.p95_latency_ms) }} ms{% else %}尚無資料{% endif %}</strong></div>
+  </section>
+
+  <p class="lifecycle-note">此工作台只保存知識版本級的核准答案快照、模型改寫與複核中繼資料；不保存原始問句或音訊。一般稽核 Log 仍不記錄答案全文。</p>
+
+  <form class="filters shadow-filters" method="get" action="/admin/shadow">
+    <label>知識編號
+      <input type="search" name="knowledge_id" value="{{ knowledge_id }}" maxlength="80" placeholder="例如：K-CATHAY-US-003">
+    </label>
+    <label>複核狀態
+      <select name="status">
+        <option value="">全部狀態</option>
+        {% for status, label in shadow_status_labels.items() %}
+          <option value="{{ status.value }}" {% if selected_status == status %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">套用篩選</button>
+    <a class="reset" href="/admin/shadow">清除</a>
+  </form>
+
+  <section class="table-card">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>知識內容</th><th>複核狀態</th><th>輸出守門</th><th>模型／Prompt</th><th>生成時間</th></tr></thead>
+        <tbody>
+          {% for result in results %}
+            <tr>
+              <td><a class="item-link" href="/admin/shadow/{{ result.shadow_id }}">{{ titles.get(result.knowledge_id, result.knowledge_id) }}</a><small>{{ result.knowledge_id }} · v{{ result.knowledge_version }}</small></td>
+              <td><span class="status shadow-status-{{ result.review_status.value }}">{{ shadow_status_labels[result.review_status] }}</span>{% if result.review_label and result.review_label.value != 'acceptable' %}<small>{{ shadow_label_labels[result.review_label] }}</small>{% endif %}</td>
+              <td>{% if result.output_guard_safe is true %}<span class="guard-pass">通過</span>{% elif result.output_guard_safe is false %}<span class="guard-block">阻擋</span>{% else %}<span class="guard-na">未執行</span>{% endif %}<small>{{ result.fallback_reason }}</small></td>
+              <td>{{ result.generation_model_id or '未取得模型結果' }}<small>{{ result.prompt_version or '無 Prompt 版本' }}</small></td>
+              <td>{% if result.generation_latency_ms is not none %}{{ '%.0f'|format(result.generation_latency_ms) }} ms{% else %}—{% endif %}<small>{{ format_event_time(result.created_at) }}</small></td>
+            </tr>
+          {% else %}
+            <tr><td class="empty" colspan="5">尚無符合條件的 Shadow 結果。使用 Web Pilot 命中核准知識後，背景工作會建立待複核項目。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

@@ -22,25 +22,59 @@ class KnowledgeStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class QuestionVariantUsage(StrEnum):
+    RETRIEVAL = "retrieval"
+    EVALUATION_ONLY = "evaluation_only"
+    EXCLUDED = "excluded"
+
+
+class QuestionVariant(BaseModel):
+    variant_id: str = Field(min_length=1, max_length=36)
+    question_text: str = Field(min_length=2, max_length=500)
+    usage: QuestionVariantUsage = QuestionVariantUsage.RETRIEVAL
+
+    @field_validator("question_text")
+    @classmethod
+    def normalize_question_text(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 2:
+            raise ValueError("問句變體不得為空白")
+        return normalized
+
+
 class KnowledgeSource(BaseModel):
     source_id: str = Field(pattern=r"^SRC-[A-Z0-9-]+$")
-    supplied_url: str
-    canonical_url: str
+    supplied_url: str | None = None
+    canonical_url: str | None = None
     title: str = Field(min_length=1)
     publisher: str = Field(min_length=1)
-    source_type: Literal["official_web"]
+    source_type: Literal["official_web", "approved_internal_faq", "local_import"]
     retrieved_at: datetime
     topics: list[str] = Field(min_length=1)
     status: SourceStatus = SourceStatus.ACTIVE
     notes: str | None = None
 
-    @field_validator("supplied_url", "canonical_url")
+    @field_validator("supplied_url", "canonical_url", mode="before")
     @classmethod
-    def require_https_url(cls, value: str) -> str:
+    def normalize_optional_url(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def require_traceable_source_url(self) -> "KnowledgeSource":
+        if self.source_type != "local_import" and (
+            self.supplied_url is None or self.canonical_url is None
+        ):
+            raise ValueError("非本機匯入的 knowledge source 必須提供 HTTPS URL")
+        for value in (self.supplied_url, self.canonical_url):
+            if value is not None:
+                self._require_https_url(value)
+        return self
+
+    @staticmethod
+    def _require_https_url(value: str) -> None:
         parsed = urlsplit(value)
         if parsed.scheme != "https" or not parsed.hostname:
             raise ValueError("knowledge source 必須使用完整 HTTPS URL")
-        return value
 
 
 class KnowledgeItem(BaseModel):
@@ -48,9 +82,9 @@ class KnowledgeItem(BaseModel):
     title: str = Field(min_length=1)
     standard_answer: str = Field(min_length=1)
     source_id: str = Field(pattern=r"^SRC-[A-Z0-9-]+$")
-    source_uri: str
+    source_uri: str | None = None
     source_locator: str = Field(min_length=1)
-    source_type: Literal["official_web"]
+    source_type: Literal["official_web", "approved_internal_faq", "local_import"]
     products: list[str] = Field(default_factory=list)
     platforms: list[str] = Field(default_factory=list)
     app_versions: list[str] = Field(default_factory=list)
@@ -69,17 +103,22 @@ class KnowledgeItem(BaseModel):
     public_answer_allowed: bool
     allowed_intents: list[str] = Field(min_length=1)
     prohibited_extensions: list[str] = Field(min_length=1)
+    question_variants: list[QuestionVariant] = Field(default_factory=list)
 
-    @field_validator("source_uri")
+    @field_validator("source_uri", mode="before")
     @classmethod
-    def require_https_source_uri(cls, value: str) -> str:
-        parsed = urlsplit(value)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise ValueError("source_uri 必須使用完整 HTTPS URL")
-        return value
+    def normalize_optional_source_uri(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
 
     @model_validator(mode="after")
     def enforce_lifecycle_requirements(self) -> "KnowledgeItem":
+        if self.source_type != "local_import" and self.source_uri is None:
+            raise ValueError("非本機匯入知識必須提供 source_uri")
+        if self.source_uri is not None:
+            parsed = urlsplit(self.source_uri)
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError("source_uri 必須使用完整 HTTPS URL")
+
         if (
             self.status in {KnowledgeStatus.DRAFT, KnowledgeStatus.REVIEW}
             and self.public_answer_allowed

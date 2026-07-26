@@ -22,6 +22,7 @@ from .answering import (
     AnswerMode,
     ControlledOutputGuard,
 )
+from .asr import MandarinPhoneticResolver, build_asr_context
 from .intent_routing import (
     IntentRouter,
     IntentRouterMode,
@@ -96,6 +97,7 @@ class TurnService:
         intent_router_mode: IntentRouterMode | str = IntentRouterMode.DISABLED,
         intent_router: IntentRouter | None = None,
         intent_router_minimum_confidence: float = 0.8,
+        phonetic_resolver: MandarinPhoneticResolver | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._sensitive_data_guard = sensitive_data_guard or SensitiveDataGuard()
@@ -110,6 +112,7 @@ class TurnService:
         self._intent_router_mode = IntentRouterMode(intent_router_mode)
         self._intent_router = intent_router
         self._intent_router_minimum_confidence = intent_router_minimum_confidence
+        self._phonetic_resolver = phonetic_resolver or MandarinPhoneticResolver()
         self._clock = clock or (lambda: datetime.now(UTC))
 
         if self._answer_mode is AnswerMode.CONTROLLED_LLM and self._answer_composer is None:
@@ -141,6 +144,15 @@ class TurnService:
 
     def record_feedback(self, *, turn_id: str, rating: str) -> None:
         self._audit_logger.turn_feedback(turn_id=turn_id, rating=rating)
+
+    def voice_asr_context(self) -> str:
+        if self._knowledge_repository is None:
+            return ""
+        try:
+            documents = self._knowledge_repository.eligible_documents(at=self._clock())
+        except KnowledgeRepositoryError:
+            return ""
+        return build_asr_context(documents)
 
     def evaluate(self, request: TurnRequest) -> TurnResponse:
         started_at = perf_counter()
@@ -233,6 +245,11 @@ class TurnService:
         if self._intent_router_mode is IntentRouterMode.DISABLED:
             return False
         if policy_result.action is PolicyAction.HANDOFF:
+            return False
+        if policy_result.intent in {
+            "credential_recovery_guidance",
+            "account_authorization_guidance",
+        }:
             return False
         return not policy_result.policy_rule_id.startswith("POL-REFUSE-")
 
@@ -331,6 +348,7 @@ class TurnService:
             )
 
         if self._knowledge_repository is None:
+            documents: tuple[KnowledgeDocument, ...] = ()
             match = None
         else:
             documents = self._knowledge_repository.eligible_documents(at=self._clock())
@@ -339,6 +357,35 @@ class TurnService:
                 intent=intent,
                 documents=documents,
             )
+
+        if (
+            match is None
+            and request.channel == "voice"
+            and intent == "general_securities_knowledge"
+        ):
+            phonetic = self._phonetic_resolver.resolve(
+                query=request.transcript,
+                intent=intent,
+                documents=documents,
+            )
+            if phonetic.ambiguous:
+                titles = "或".join(
+                    f"「{candidate.document.item.title}」"
+                    for candidate in phonetic.candidates
+                )
+                return KnowledgeAnswerOutcome(
+                    result=AnswerContract(
+                        decision=Decision.CLARIFY,
+                        intent=intent,
+                        policy_rule_id="ASR-PHONETIC-002",
+                        answer=f"我辨識到的內容可能是在詢問{titles}，請再說一次完整問題。",
+                        confidence=phonetic.candidates[0].score,
+                    ),
+                    generation=generation,
+                )
+            if phonetic.match is not None:
+                match = phonetic.match
+                policy_rule_id = "ASR-PHONETIC-001"
 
         if match is None:
             return KnowledgeAnswerOutcome(

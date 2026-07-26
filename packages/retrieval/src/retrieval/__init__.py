@@ -9,6 +9,8 @@ from .models import (
     KnowledgeItem,
     KnowledgeSource,
     KnowledgeStatus,
+    QuestionVariant,
+    QuestionVariantUsage,
     RetrievalMatch,
     SourceStatus,
 )
@@ -28,6 +30,8 @@ __all__ = [
     "LocalKnowledgeRepository",
     "LexicalKnowledgeRetriever",
     "OpenAICompatibleEmbeddingClient",
+    "QuestionVariant",
+    "QuestionVariantUsage",
     "RetrievalMatch",
     "SqlKnowledgeRepository",
     "SourceStatus",

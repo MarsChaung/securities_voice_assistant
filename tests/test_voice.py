@@ -3,6 +3,7 @@ import io
 import json
 import wave
 from array import array
+from datetime import UTC, datetime
 
 import httpx
 from fastapi.testclient import TestClient
@@ -17,6 +18,8 @@ from orchestrator.voice import (
     realtime_asr_url,
     split_tts_text,
 )
+from retrieval import KnowledgeDocument, QuestionVariant, QuestionVariantUsage
+from test_api import StaticKnowledgeRepository, published_document
 
 
 def make_wav_frame() -> bytes:
@@ -170,6 +173,7 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert config.json()["available"] is True
     assert config.json()["models"]["asr"] == "synthetic-asr"
     assert config.json()["models"]["voice_clone"] is True
+    assert config.json()["asr_context"] == ""
     assert "reference.wav" not in config.text
     assert "合成參考逐字稿" not in config.text
     assert events[0]["type"] == "turn"
@@ -177,3 +181,59 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert turn["result"]["policy_rule_id"] == "KNO-001"
     assert events[1]["type"] == "audio"
     assert events[-1]["type"] == "done"
+
+
+def test_voice_endpoint_applies_phonetic_recovery_before_tts() -> None:
+    frame = make_wav_frame()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=frame)
+
+    base = published_document()
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-ASR-001",
+                "title": "假除權息說明",
+                "standard_answer": "這是假除權息的核准說明。",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="asr-voice-endpoint",
+                        question_text="什麼是假除權息？",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base.source,
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    voice = voice_service(httpx.MockTransport(handler))
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(service=service, settings=settings, voice_service=voice)
+    ) as client:
+        response = client.post(
+            "/v1/voice/respond-stream",
+            json={"transcript": "什麼是甲雛全息"},
+        )
+
+    events = [json.loads(line) for line in response.text.splitlines()]
+    result = events[0]["turn"]["result"]
+    assert result["decision"] == "answer"
+    assert result["policy_rule_id"] == "ASR-PHONETIC-001"
+    assert result["answer_id"] == "K-FAQ-ASR-001"
+    assert events[1]["type"] == "audio"

@@ -7,24 +7,27 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class Decision(StrEnum):
     ANSWER = "answer"
+    CLARIFY = "clarify"
     REFUSE = "refuse"
     HANDOFF = "handoff"
 
 
 class TurnRequest(BaseModel):
     transcript: str = Field(min_length=1, max_length=4_000)
-    channel: Literal["web"] = "web"
+    channel: Literal["web", "voice"] = "web"
 
 
 class Citation(BaseModel):
     source_id: str = Field(pattern=r"^SRC-[A-Z0-9-]+$")
-    source_uri: str
+    source_uri: str | None = None
     source_title: str = Field(min_length=1)
     source_locator: str = Field(min_length=1)
 
     @field_validator("source_uri")
     @classmethod
-    def require_https_source_uri(cls, value: str) -> str:
+    def require_https_source_uri(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         parsed = urlsplit(value)
         if parsed.scheme != "https" or not parsed.hostname:
             raise ValueError("citation source_uri 必須使用完整 HTTPS URL")

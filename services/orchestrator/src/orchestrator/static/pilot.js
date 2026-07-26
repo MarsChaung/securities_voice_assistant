@@ -29,6 +29,7 @@ const voiceState = {
 
 const decisionLabels = {
   answer: "核准知識回答",
+  clarify: "請確認語音內容",
   refuse: "安全拒答",
   handoff: "轉人工處理",
 };
@@ -70,22 +71,29 @@ function appendLoading(id = "loading-message") {
   scrollToLatest();
 }
 
-function safeSourceLink(citation) {
-  let parsed;
-  try {
-    parsed = new URL(citation.source_uri);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== "https:") return null;
+function safeSourceReference(citation) {
+  if (citation.source_uri) {
+    let parsed;
+    try {
+      parsed = new URL(citation.source_uri);
+    } catch {
+      return null;
+    }
+    if (parsed.protocol !== "https:") return null;
 
-  const link = element("a", "source-link");
-  link.href = parsed.href;
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
-  link.append(document.createTextNode(`${citation.source_title} ↗`));
-  link.append(element("span", "source-locator", citation.source_locator));
-  return link;
+    const link = element("a", "source-link");
+    link.href = parsed.href;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.append(document.createTextNode(`${citation.source_title} ↗`));
+    link.append(element("span", "source-locator", citation.source_locator));
+    return link;
+  }
+
+  const reference = element("div", "source-link source-reference");
+  reference.append(document.createTextNode(citation.source_title));
+  reference.append(element("span", "source-locator", citation.source_locator));
+  return reference;
 }
 
 function feedbackPanel(turnId) {
@@ -139,10 +147,10 @@ function appendAssistantMessage(turn, allowFeedback = true) {
   copy.append(element("p", "", result.answer));
   content.append(copy);
 
-  const links = (result.citations || []).map(safeSourceLink).filter(Boolean);
-  if (links.length) {
+  const references = (result.citations || []).map(safeSourceReference).filter(Boolean);
+  if (references.length) {
     const sources = element("div", "sources");
-    sources.append(element("strong", "", "官方來源"), ...links);
+    sources.append(element("strong", "", "資料來源"), ...references);
     content.append(sources);
   }
 
@@ -347,6 +355,7 @@ async function ensureRealtimeAsr() {
       streaming: false,
       semantic_endpointing: true,
       output_script: "traditional",
+      context: voiceState.config.asr_context || undefined,
     }));
     socket.onmessage = (event) => {
       let data;

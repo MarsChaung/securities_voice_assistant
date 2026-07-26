@@ -68,7 +68,16 @@ class DomainPolicyEngine:
             "POL-REFUSE-004",
             "credential_or_identity_support",
             PolicyAction.REFUSE,
-            ("忘記密碼", "重設密碼", "OTP", "驗證碼", "憑證", "裝置綁定"),
+            (
+                "忘記密碼",
+                "重設密碼",
+                "補發密碼",
+                "密碼補發",
+                "OTP",
+                "驗證碼",
+                "憑證",
+                "裝置綁定",
+            ),
         ),
         PolicyRule(
             "POL-REFUSE-005",
@@ -81,6 +90,20 @@ class DomainPolicyEngine:
             "prompt_injection",
             PolicyAction.REFUSE,
             ("忽略上述", "忽略前述", "system prompt", "系統提示詞", "開發者訊息"),
+        ),
+        PolicyRule(
+            "POL-REFUSE-007",
+            "account_authorization_execution",
+            PolicyAction.REFUSE,
+            (
+                "幫我直接把帳戶授權",
+                "直接幫我把帳戶授權",
+                "請直接把我的帳戶授權",
+                "替我辦理帳戶授權",
+                "代我辦理帳戶授權",
+                "幫我完成帳戶授權",
+                "立即把我的帳戶授權",
+            ),
         ),
         PolicyRule(
             "POL-ALLOW-001",
@@ -168,8 +191,32 @@ class DomainPolicyEngine:
             return self._to_result(handoff_matches[0])
 
         refuse_matches = [rule for rule in matches if rule.action is PolicyAction.REFUSE]
+        non_credential_refusals = [
+            rule
+            for rule in refuse_matches
+            if rule.intent != "credential_or_identity_support"
+        ]
+        if non_credential_refusals:
+            return self._to_result(non_credential_refusals[0])
+
+        if self._is_public_credential_recovery_guidance(normalized_text):
+            return PolicyResult(
+                action=PolicyAction.ALLOW,
+                intent="credential_recovery_guidance",
+                policy_rule_id="POL-ALLOW-007",
+                confidence=1.0,
+            )
+
         if refuse_matches:
             return self._to_result(refuse_matches[0])
+
+        if self._is_public_account_authorization_guidance(normalized_text):
+            return PolicyResult(
+                action=PolicyAction.ALLOW,
+                intent="account_authorization_guidance",
+                policy_rule_id="POL-ALLOW-008",
+                confidence=1.0,
+            )
 
         allow_matches = [rule for rule in matches if rule.action is PolicyAction.ALLOW]
         if len(allow_matches) == 1:
@@ -195,4 +242,66 @@ class DomainPolicyEngine:
             intent=rule.intent,
             policy_rule_id=rule.rule_id,
             confidence=1.0,
+        )
+
+    @staticmethod
+    def _is_public_credential_recovery_guidance(normalized_text: str) -> bool:
+        if any(
+            phrase in normalized_text
+            for phrase in (
+                "幫我補發",
+                "替我補發",
+                "直接補發",
+                "幫我重設",
+                "替我重設",
+                "直接重設",
+                "幫我變更",
+                "替我變更",
+                "憑證",
+                "裝置綁定",
+            )
+        ):
+            return False
+
+        asks_for_password_reissue = any(
+            phrase in normalized_text for phrase in ("補發密碼", "密碼補發")
+        )
+        phone_changed = any(
+            phrase in normalized_text
+            for phrase in (
+                "手機變",
+                "換手機",
+                "手機號碼更改",
+                "電話號碼更改",
+                "行動電話已改",
+                "行動電話已變更",
+            )
+        )
+        cannot_receive_code = any(
+            phrase in normalized_text
+            for phrase in (
+                "無法拿到驗證碼",
+                "無法取得驗證碼",
+                "無法收到驗證碼",
+            )
+        )
+        forgot_password = "忘記密碼" in normalized_text
+        return asks_for_password_reissue or (
+            phone_changed and (cannot_receive_code or forgot_password)
+        )
+
+    @staticmethod
+    def _is_public_account_authorization_guidance(normalized_text: str) -> bool:
+        return any(
+            phrase in normalized_text
+            for phrase in (
+                "帳戶授權",
+                "帳戶委任",
+                "委任授權",
+                "委任帳戶",
+                "授權他人買賣",
+                "授權給別人",
+                "多帳號授權",
+                "多賬戶授權",
+            )
         )

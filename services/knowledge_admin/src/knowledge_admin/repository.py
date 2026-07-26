@@ -12,12 +12,15 @@ from retrieval import (
     KnowledgeSource,
     KnowledgeStatus,
     LocalKnowledgeRepository,
+    QuestionVariant,
+    QuestionVariantUsage,
 )
 
 from .database import (
     GovernanceEventRecord,
     KnowledgeItemRecord,
     KnowledgeItemVersionRecord,
+    KnowledgeQuestionVariantRecord,
     KnowledgeSourceRecord,
 )
 from .governance import GovernanceAction, GovernanceActor, GovernancePolicy
@@ -38,6 +41,13 @@ class GovernancePayload:
     owner_unit: str | None = None
     app_versions: tuple[str, ...] = ()
     reason: str | None = None
+
+
+@dataclass(frozen=True)
+class QuestionVariantInput:
+    variant_id: str | None
+    question_text: str
+    usage: QuestionVariantUsage
 
 
 @dataclass(frozen=True)
@@ -141,6 +151,11 @@ class DatabaseKnowledgeRepository:
         payload: GovernancePayload | None = None,
         now: datetime | None = None,
     ) -> KnowledgeRecord:
+        if action in {
+            GovernanceAction.UPDATE_CONTENT,
+            GovernanceAction.UPDATE_QUESTION_VARIANTS,
+        }:
+            raise ValueError("草稿內容必須使用專用編輯操作")
         resolved_payload = payload or GovernancePayload()
         occurred_at = now or datetime.now(UTC)
         if occurred_at.tzinfo is None:
@@ -194,6 +209,194 @@ class DatabaseKnowledgeRepository:
             )
             session.flush()
             return KnowledgeRecord(item=updated_item, row_version=record.row_version)
+
+    def update_content(
+        self,
+        *,
+        knowledge_id: str,
+        title: str,
+        standard_answer: str,
+        actor: GovernanceActor,
+        expected_version: int,
+        now: datetime | None = None,
+    ) -> KnowledgeRecord:
+        occurred_at = now or datetime.now(UTC)
+        if occurred_at.tzinfo is None:
+            raise ValueError("治理事件時間必須包含時區")
+
+        with self._sessions.begin() as session:
+            record = session.scalar(
+                select(KnowledgeItemRecord)
+                .where(KnowledgeItemRecord.knowledge_id == knowledge_id)
+                .with_for_update()
+            )
+            if record is None:
+                raise KnowledgeNotFoundError(knowledge_id)
+            if record.row_version != expected_version:
+                raise ConcurrentUpdateError("資料已被其他操作更新，請重新載入")
+
+            current_item = _item_to_domain(record)
+            GovernancePolicy.next_status(
+                current_item,
+                GovernanceAction.UPDATE_CONTENT,
+                actor,
+            )
+            validated = KnowledgeItem.model_validate(
+                current_item.model_dump(mode="json")
+                | {
+                    "title": title.strip(),
+                    "standard_answer": standard_answer.strip(),
+                }
+            )
+            changed_fields = sum(
+                (
+                    record.title != validated.title,
+                    record.standard_answer != validated.standard_answer,
+                )
+            )
+            if changed_fields == 0:
+                raise ValueError("知識內容沒有變更")
+
+            record.title = validated.title
+            record.standard_answer = validated.standard_answer
+            record.row_version += 1
+            record.updated_at = occurred_at
+            session.add(
+                GovernanceEventRecord(
+                    event_id=str(uuid4()),
+                    knowledge_id=knowledge_id,
+                    action=GovernanceAction.UPDATE_CONTENT.value,
+                    from_status=KnowledgeStatus.DRAFT.value,
+                    to_status=KnowledgeStatus.DRAFT.value,
+                    actor_id=actor.actor_id,
+                    reason=f"更新 {changed_fields} 個知識內容欄位",
+                    row_version=record.row_version,
+                    occurred_at=occurred_at,
+                )
+            )
+            session.flush()
+            return KnowledgeRecord(
+                item=_item_to_domain(record),
+                row_version=record.row_version,
+            )
+
+    def update_question_variants(
+        self,
+        *,
+        knowledge_id: str,
+        variants: tuple[QuestionVariantInput, ...],
+        actor: GovernanceActor,
+        expected_version: int,
+        now: datetime | None = None,
+    ) -> KnowledgeRecord:
+        occurred_at = now or datetime.now(UTC)
+        if occurred_at.tzinfo is None:
+            raise ValueError("治理事件時間必須包含時區")
+
+        with self._sessions.begin() as session:
+            record = session.scalar(
+                select(KnowledgeItemRecord)
+                .where(KnowledgeItemRecord.knowledge_id == knowledge_id)
+                .with_for_update()
+            )
+            if record is None:
+                raise KnowledgeNotFoundError(knowledge_id)
+            if record.row_version != expected_version:
+                raise ConcurrentUpdateError("資料已被其他操作更新，請重新載入")
+
+            current_item = _item_to_domain(record)
+            GovernancePolicy.next_status(
+                current_item,
+                GovernanceAction.UPDATE_QUESTION_VARIANTS,
+                actor,
+            )
+            resolved_variants = _validate_variant_inputs(
+                variants,
+                existing=record.question_variants,
+            )
+            retrieval_normalized = {
+                normalized
+                for _, _, usage, normalized in resolved_variants
+                if usage is QuestionVariantUsage.RETRIEVAL
+            }
+            if retrieval_normalized:
+                conflict = session.scalar(
+                    select(KnowledgeQuestionVariantRecord)
+                    .where(
+                        KnowledgeQuestionVariantRecord.knowledge_id != knowledge_id,
+                        KnowledgeQuestionVariantRecord.usage
+                        == QuestionVariantUsage.RETRIEVAL.value,
+                        KnowledgeQuestionVariantRecord.normalized_text.in_(
+                            retrieval_normalized
+                        ),
+                    )
+                    .limit(1)
+                )
+                if conflict is not None:
+                    raise ValueError(
+                        f"問句變體與 {conflict.knowledge_id} 的正式檢索問句重複"
+                    )
+
+            existing_by_id = {
+                variant.variant_id: variant for variant in record.question_variants
+            }
+            next_records: list[KnowledgeQuestionVariantRecord] = []
+            added = 0
+            updated = 0
+            retained_ids: set[str] = set()
+            for position, (variant_id, question_text, usage, normalized) in enumerate(
+                resolved_variants
+            ):
+                if variant_id is None:
+                    variant_record = KnowledgeQuestionVariantRecord(
+                        variant_id=str(uuid4()),
+                        knowledge_id=knowledge_id,
+                        question_text=question_text,
+                        normalized_text=normalized,
+                        usage=usage.value,
+                        position=position,
+                        created_at=occurred_at,
+                        updated_at=occurred_at,
+                    )
+                    added += 1
+                else:
+                    variant_record = existing_by_id[variant_id]
+                    retained_ids.add(variant_id)
+                    if (
+                        variant_record.question_text != question_text
+                        or variant_record.usage != usage.value
+                        or variant_record.position != position
+                    ):
+                        updated += 1
+                    variant_record.question_text = question_text
+                    variant_record.normalized_text = normalized
+                    variant_record.usage = usage.value
+                    variant_record.position = position
+                    variant_record.updated_at = occurred_at
+                next_records.append(variant_record)
+
+            deleted = len(existing_by_id.keys() - retained_ids)
+            record.question_variants = next_records
+            record.row_version += 1
+            record.updated_at = occurred_at
+            session.add(
+                GovernanceEventRecord(
+                    event_id=str(uuid4()),
+                    knowledge_id=knowledge_id,
+                    action=GovernanceAction.UPDATE_QUESTION_VARIANTS.value,
+                    from_status=KnowledgeStatus.DRAFT.value,
+                    to_status=KnowledgeStatus.DRAFT.value,
+                    actor_id=actor.actor_id,
+                    reason=f"問句變體：新增 {added}、修改 {updated}、刪除 {deleted}",
+                    row_version=record.row_version,
+                    occurred_at=occurred_at,
+                )
+            )
+            session.flush()
+            return KnowledgeRecord(
+                item=_item_to_domain(record),
+                row_version=record.row_version,
+            )
 
     @staticmethod
     def _apply_action(
@@ -329,6 +532,14 @@ def _item_to_domain(record: KnowledgeItemRecord) -> KnowledgeItem:
             "public_answer_allowed": record.public_answer_allowed,
             "allowed_intents": record.allowed_intents,
             "prohibited_extensions": record.prohibited_extensions,
+            "question_variants": [
+                {
+                    "variant_id": variant.variant_id,
+                    "question_text": variant.question_text,
+                    "usage": variant.usage,
+                }
+                for variant in record.question_variants
+            ],
         }
     )
 
@@ -393,7 +604,7 @@ def _source_from_domain(source: KnowledgeSource) -> KnowledgeSourceRecord:
 
 
 def _item_from_domain(item: KnowledgeItem, *, now: datetime) -> KnowledgeItemRecord:
-    return KnowledgeItemRecord(
+    record = KnowledgeItemRecord(
         knowledge_id=item.knowledge_id,
         title=item.title,
         standard_answer=item.standard_answer,
@@ -423,3 +634,59 @@ def _item_from_domain(item: KnowledgeItem, *, now: datetime) -> KnowledgeItemRec
         created_at=now,
         updated_at=now,
     )
+    record.question_variants = [
+        KnowledgeQuestionVariantRecord(
+            variant_id=variant.variant_id,
+            knowledge_id=item.knowledge_id,
+            question_text=variant.question_text,
+            normalized_text=_normalize_question(variant.question_text),
+            usage=variant.usage.value,
+            position=position,
+            created_at=now,
+            updated_at=now,
+        )
+        for position, variant in enumerate(item.question_variants)
+    ]
+    return record
+
+
+def _validate_variant_inputs(
+    variants: tuple[QuestionVariantInput, ...],
+    *,
+    existing: list[KnowledgeQuestionVariantRecord],
+) -> tuple[tuple[str | None, str, QuestionVariantUsage, str], ...]:
+    existing_ids = {variant.variant_id for variant in existing}
+    provided_ids = [variant.variant_id for variant in variants if variant.variant_id]
+    if len(provided_ids) != len(set(provided_ids)):
+        raise ValueError("同一問句變體不得重複提交")
+    unknown_ids = set(provided_ids) - existing_ids
+    if unknown_ids:
+        raise ValueError("提交了不屬於此知識項目的問句變體")
+
+    resolved: list[tuple[str | None, str, QuestionVariantUsage, str]] = []
+    normalized_values: set[str] = set()
+    for variant in variants:
+        validated = QuestionVariant(
+            variant_id=variant.variant_id or "new",
+            question_text=variant.question_text,
+            usage=variant.usage,
+        )
+        normalized = _normalize_question(validated.question_text)
+        if not normalized:
+            raise ValueError("問句變體必須包含文字或數字")
+        if normalized in normalized_values:
+            raise ValueError("問句變體正規化後不得重複")
+        normalized_values.add(normalized)
+        resolved.append(
+            (
+                variant.variant_id,
+                validated.question_text,
+                validated.usage,
+                normalized,
+            )
+        )
+    return tuple(resolved)
+
+
+def _normalize_question(value: str) -> str:
+    return re.sub(r"[^0-9a-z\u3400-\u9fff]", "", value.casefold())

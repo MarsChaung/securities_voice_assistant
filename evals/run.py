@@ -2,8 +2,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from orchestrator.asr import MandarinPhoneticResolver
 from policy import DomainPolicyEngine, SensitiveDataGuard
-from retrieval import KnowledgeDocument, LexicalKnowledgeRetriever, LocalKnowledgeRepository
+from retrieval import (
+    KnowledgeDocument,
+    LexicalKnowledgeRetriever,
+    LocalKnowledgeRepository,
+    QuestionVariant,
+    QuestionVariantUsage,
+)
 
 EVAL_ROOT = Path(__file__).parent
 
@@ -62,6 +69,42 @@ def run_evaluations() -> tuple[int, int, list[str]]:
         if actual_id != case["expected_knowledge_id"]:
             failures.append(
                 f"{case['case_id']}: expected={case['expected_knowledge_id']}, actual={actual_id}"
+            )
+
+    base_document = documents[0]
+    phonetic_resolver = MandarinPhoneticResolver()
+    for index, case in enumerate(
+        _load_cases(EVAL_ROOT / "asr_phonetic" / "golden.jsonl"),
+        start=1,
+    ):
+        total += 1
+        document = KnowledgeDocument(
+            item=base_document.item.model_copy(
+                update={
+                    "knowledge_id": f"K-ASR-EVAL-{index:03d}",
+                    "title": case["target_title"],
+                    "allowed_intents": ["faq_general_guidance"],
+                    "question_variants": [
+                        QuestionVariant(
+                            variant_id=f"asr-eval-{index}",
+                            question_text=case["target_variant"],
+                            usage=QuestionVariantUsage.RETRIEVAL,
+                        )
+                    ],
+                }
+            ),
+            source=base_document.source,
+        )
+        resolution = phonetic_resolver.resolve(
+            query=case["input"],
+            intent="general_securities_knowledge",
+            documents=(document,),
+        )
+        actual_match = resolution.match is not None
+        if actual_match is not case["expected_match"]:
+            failures.append(
+                f"{case['case_id']}: expected_match={case['expected_match']}, "
+                f"actual_match={actual_match}"
             )
 
     return total - len(failures), total, failures

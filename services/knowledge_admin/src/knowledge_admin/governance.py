@@ -13,6 +13,8 @@ class KnowledgeRole(StrEnum):
 
 
 class GovernanceAction(StrEnum):
+    UPDATE_CONTENT = "update_content"
+    UPDATE_QUESTION_VARIANTS = "update_question_variants"
     START_REVISION = "start_revision"
     SUBMIT_REVIEW = "submit_review"
     COMPLETE_REVIEW = "complete_review"
@@ -34,6 +36,11 @@ class GovernanceError(ValueError):
 
 class GovernancePolicy:
     _TRANSITIONS = {
+        (KnowledgeStatus.DRAFT, GovernanceAction.UPDATE_CONTENT): KnowledgeStatus.DRAFT,
+        (
+            KnowledgeStatus.DRAFT,
+            GovernanceAction.UPDATE_QUESTION_VARIANTS,
+        ): KnowledgeStatus.DRAFT,
         (KnowledgeStatus.PUBLISHED, GovernanceAction.START_REVISION): KnowledgeStatus.DRAFT,
         (KnowledgeStatus.DRAFT, GovernanceAction.SUBMIT_REVIEW): KnowledgeStatus.REVIEW,
         (KnowledgeStatus.REVIEW, GovernanceAction.COMPLETE_REVIEW): KnowledgeStatus.REVIEW,
@@ -46,6 +53,8 @@ class GovernancePolicy:
     }
 
     _ACTION_ROLES = {
+        GovernanceAction.UPDATE_CONTENT: frozenset({KnowledgeRole.AUTHOR}),
+        GovernanceAction.UPDATE_QUESTION_VARIANTS: frozenset({KnowledgeRole.AUTHOR}),
         GovernanceAction.START_REVISION: frozenset({KnowledgeRole.AUTHOR}),
         GovernanceAction.SUBMIT_REVIEW: frozenset({KnowledgeRole.AUTHOR}),
         GovernanceAction.COMPLETE_REVIEW: frozenset({KnowledgeRole.REVIEWER}),
@@ -81,6 +90,12 @@ class GovernancePolicy:
     ) -> None:
         if action is GovernanceAction.SUBMIT_REVIEW and actor.actor_id != item.author:
             raise GovernanceError("只有原作者可以送交審核")
+
+        if action in {
+            GovernanceAction.UPDATE_CONTENT,
+            GovernanceAction.UPDATE_QUESTION_VARIANTS,
+        } and actor.actor_id != item.author:
+            raise GovernanceError("只有原作者可以編輯知識草稿")
 
         if action is GovernanceAction.START_REVISION and actor.actor_id != item.author:
             raise GovernanceError("只有原作者可以建立複審新版")

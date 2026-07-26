@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Integer,
     MetaData,
     String,
     Table,
@@ -18,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine, RowMapping
 from sqlalchemy.exc import SQLAlchemyError
 
-from .models import KnowledgeDocument, KnowledgeItem, KnowledgeSource
+from .models import KnowledgeDocument, KnowledgeItem, KnowledgeSource, QuestionVariant
 
 _metadata = MetaData()
 _sources = Table(
@@ -63,6 +64,16 @@ _items = Table(
     Column("public_answer_allowed", Boolean),
     Column("allowed_intents", JSON),
     Column("prohibited_extensions", JSON),
+)
+_question_variants = Table(
+    "knowledge_question_variants",
+    _metadata,
+    Column("variant_id", String),
+    Column("knowledge_id", String),
+    Column("question_text", Text),
+    Column("normalized_text", Text),
+    Column("usage", String),
+    Column("position", Integer),
 )
 
 
@@ -110,8 +121,43 @@ class SqlKnowledgeRepository:
         )
         try:
             with self.engine.connect() as connection:
-                rows = connection.execute(statement).mappings()
-                return tuple(_row_to_document(row) for row in rows)
+                rows = tuple(connection.execute(statement).mappings())
+                knowledge_ids = tuple(row["knowledge_id"] for row in rows)
+                variants_by_knowledge_id: dict[str, list[QuestionVariant]] = {
+                    knowledge_id: [] for knowledge_id in knowledge_ids
+                }
+                if knowledge_ids:
+                    variant_rows = connection.execute(
+                        select(
+                            _question_variants.c.variant_id,
+                            _question_variants.c.knowledge_id,
+                            _question_variants.c.question_text,
+                            _question_variants.c.usage,
+                        )
+                        .where(_question_variants.c.knowledge_id.in_(knowledge_ids))
+                        .order_by(
+                            _question_variants.c.knowledge_id,
+                            _question_variants.c.position,
+                            _question_variants.c.variant_id,
+                        )
+                    ).mappings()
+                    for variant_row in variant_rows:
+                        variants_by_knowledge_id[variant_row["knowledge_id"]].append(
+                            QuestionVariant.model_validate(
+                                {
+                                    "variant_id": variant_row["variant_id"],
+                                    "question_text": variant_row["question_text"],
+                                    "usage": variant_row["usage"],
+                                }
+                            )
+                        )
+                return tuple(
+                    _row_to_document(
+                        row,
+                        question_variants=variants_by_knowledge_id[row["knowledge_id"]],
+                    )
+                    for row in rows
+                )
         except (SQLAlchemyError, ValidationError) as exc:
             raise KnowledgeRepositoryError("knowledge database unavailable") from exc
 
@@ -157,8 +203,17 @@ _SOURCE_FIELDS = (
 )
 
 
-def _row_to_document(row: RowMapping) -> KnowledgeDocument:
-    item = KnowledgeItem.model_validate({field: row[field] for field in _ITEM_FIELDS})
+def _row_to_document(
+    row: RowMapping,
+    *,
+    question_variants: list[QuestionVariant],
+) -> KnowledgeDocument:
+    item = KnowledgeItem.model_validate(
+        {
+            **{field: row[field] for field in _ITEM_FIELDS},
+            "question_variants": question_variants,
+        }
+    )
     source = KnowledgeSource.model_validate(
         {field: row[f"source_{field}"] for field in _SOURCE_FIELDS}
     )

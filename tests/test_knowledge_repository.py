@@ -18,9 +18,14 @@ def test_initial_catalog_is_traceable_and_not_runtime_eligible() -> None:
     assert repository.eligible_items(at=datetime.fromisoformat("2026-07-15T19:30:00+08:00")) == []
 
     source_ids = {source.source_id for source in repository.sources}
-    assert all(urlsplit(source.canonical_url).query == "" for source in repository.sources)
     assert all(
-        urlsplit(source.canonical_url).hostname == "istockapp.cathaysec.com.tw"
+        source.canonical_url is not None
+        and urlsplit(source.canonical_url).query == ""
+        for source in repository.sources
+    )
+    assert all(
+        source.canonical_url is not None
+        and urlsplit(source.canonical_url).hostname == "istockapp.cathaysec.com.tw"
         for source in repository.sources
     )
     assert {item.source_id for item in repository.items} == source_ids

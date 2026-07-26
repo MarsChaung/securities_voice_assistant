@@ -11,8 +11,9 @@ from knowledge_admin.repository import (
     ConcurrentUpdateError,
     DatabaseKnowledgeRepository,
     GovernancePayload,
+    QuestionVariantInput,
 )
-from retrieval import KnowledgeStatus
+from retrieval import KnowledgeStatus, QuestionVariantUsage
 
 ROOT = Path(__file__).parents[1]
 
@@ -26,11 +27,12 @@ def publish_for_revision(
     *,
     knowledge_id: str = "K-CATHAY-DCA-001",
 ) -> None:
+    current = repository.get_item(knowledge_id)
     submitted = repository.perform_action(
         knowledge_id=knowledge_id,
         action=GovernanceAction.SUBMIT_REVIEW,
         actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
-        expected_version=1,
+        expected_version=current.row_version,
         now=datetime(2026, 7, 18, tzinfo=UTC),
     )
     reviewed = repository.perform_action(
@@ -64,6 +66,88 @@ def publish_for_revision(
 def test_seed_is_idempotent(knowledge_store: DatabaseKnowledgeRepository) -> None:
     assert len(knowledge_store.list_sources()) == 4
     assert len(knowledge_store.list_items()) == 15
+
+
+def test_author_can_add_edit_and_delete_question_variants_in_draft(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    knowledge_id = "K-CATHAY-DCA-001"
+    created = knowledge_store.update_question_variants(
+        knowledge_id=knowledge_id,
+        variants=(
+            QuestionVariantInput(
+                variant_id=None,
+                question_text="什麼是台股定期定額？",
+                usage=QuestionVariantUsage.RETRIEVAL,
+            ),
+            QuestionVariantInput(
+                variant_id=None,
+                question_text="每個月固定買台股是什麼？",
+                usage=QuestionVariantUsage.EVALUATION_ONLY,
+            ),
+        ),
+        actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+        expected_version=1,
+        now=datetime(2026, 7, 19, tzinfo=UTC),
+    )
+
+    assert created.row_version == 2
+    assert [variant.question_text for variant in created.item.question_variants] == [
+        "什麼是台股定期定額？",
+        "每個月固定買台股是什麼？",
+    ]
+    assert created.item.question_variants[1].usage is QuestionVariantUsage.EVALUATION_ONLY
+    first_id = created.item.question_variants[0].variant_id
+
+    revised = knowledge_store.update_question_variants(
+        knowledge_id=knowledge_id,
+        variants=(
+            QuestionVariantInput(
+                variant_id=first_id,
+                question_text="台股定期定額是什麼？",
+                usage=QuestionVariantUsage.EXCLUDED,
+            ),
+            QuestionVariantInput(
+                variant_id=None,
+                question_text="固定每月投入台股的方式是什麼？",
+                usage=QuestionVariantUsage.RETRIEVAL,
+            ),
+        ),
+        actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+        expected_version=created.row_version,
+        now=datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    assert revised.row_version == 3
+    assert revised.item.question_variants[0].variant_id == first_id
+    assert revised.item.question_variants[0].usage is QuestionVariantUsage.EXCLUDED
+    assert len(revised.item.question_variants) == 2
+    assert knowledge_store.list_events(knowledge_id)[-1].reason == (
+        "問句變體：新增 1、修改 1、刪除 1"
+    )
+
+
+def test_normalized_duplicate_question_variants_are_rejected(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    with pytest.raises(ValueError, match="正規化後不得重複"):
+        knowledge_store.update_question_variants(
+            knowledge_id="K-CATHAY-DCA-001",
+            variants=(
+                QuestionVariantInput(
+                    variant_id=None,
+                    question_text="線上開戶？",
+                    usage=QuestionVariantUsage.RETRIEVAL,
+                ),
+                QuestionVariantInput(
+                    variant_id=None,
+                    question_text="線上 開戶",
+                    usage=QuestionVariantUsage.RETRIEVAL,
+                ),
+            ),
+            actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+            expected_version=1,
+        )
 
     inserted = knowledge_store.seed_from_files(ROOT / "knowledge")
 
@@ -214,6 +298,19 @@ def test_expired_published_item_can_start_governed_revision(
     knowledge_store: DatabaseKnowledgeRepository,
 ) -> None:
     knowledge_id = "K-CATHAY-DCA-001"
+    knowledge_store.update_question_variants(
+        knowledge_id=knowledge_id,
+        variants=(
+            QuestionVariantInput(
+                variant_id=None,
+                question_text="台股定期定額是什麼？",
+                usage=QuestionVariantUsage.RETRIEVAL,
+            ),
+        ),
+        actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+        expected_version=1,
+        now=datetime(2026, 7, 18, tzinfo=UTC),
+    )
     publish_for_revision(knowledge_store, knowledge_id=knowledge_id)
     published = knowledge_store.get_item(knowledge_id)
 
@@ -240,6 +337,7 @@ def test_expired_published_item_can_start_governed_revision(
     assert versions[0].item.version == "1.0"
     assert versions[0].item.status is KnowledgeStatus.PUBLISHED
     assert versions[0].item.review_at == datetime(2026, 7, 20, tzinfo=UTC)
+    assert versions[0].item.question_variants[0].question_text == "台股定期定額是什麼？"
     assert versions[0].archived_by == "Codex-assisted draft import"
     assert knowledge_store.list_events(knowledge_id)[-1].action is GovernanceAction.START_REVISION
 
@@ -319,6 +417,8 @@ def test_alembic_migration_creates_governance_tables(
         "knowledge_items",
         "knowledge_item_versions",
         "knowledge_governance_events",
+        "knowledge_question_variants",
+        "faq_import_batches",
     } <= table_names
 
 

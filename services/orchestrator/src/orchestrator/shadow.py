@@ -1,10 +1,11 @@
+import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import BoundedSemaphore, Lock
 from typing import Protocol
 
-from observability import SafeAuditLogger
+from observability import SafeAuditLogger, ShadowReviewInput
 
 from .answering import (
     AnswerComposer,
@@ -32,6 +33,10 @@ class ShadowAnswerRunner(Protocol):
     def close(self) -> None: ...
 
 
+class ShadowReviewWriter(Protocol):
+    def record(self, item: ShadowReviewInput) -> object: ...
+
+
 class ThreadedShadowAnswerRunner:
     """Run privacy-safe Shadow generation outside the request path."""
 
@@ -41,11 +46,13 @@ class ThreadedShadowAnswerRunner:
         composer: AnswerComposer,
         audit_logger: SafeAuditLogger | None = None,
         output_guard: ControlledOutputGuard | None = None,
+        review_writer: ShadowReviewWriter | None = None,
         max_pending: int = 8,
     ) -> None:
         self._composer = composer
         self._audit_logger = audit_logger or SafeAuditLogger()
         self._output_guard = output_guard or ControlledOutputGuard()
+        self._review_writer = review_writer
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shadow-answer")
         self._capacity = BoundedSemaphore(max_pending)
         self._known_evidence: set[tuple[str, str, str]] = set()
@@ -82,6 +89,23 @@ class ThreadedShadowAnswerRunner:
                 output_guard_safe=False,
                 fallback_reason="generation_error",
             )
+            self._persist_review(
+                ShadowReviewInput(
+                    turn_id=task.turn_id,
+                    knowledge_id=evidence.knowledge_id,
+                    knowledge_version=evidence.knowledge_version,
+                    source_id=evidence.source_id,
+                    standard_answer=evidence.standard_answer,
+                    prohibited_extensions=evidence.prohibited_extensions,
+                    generated_answer=None,
+                    generation_model_id=None,
+                    prompt_version=None,
+                    prompt_hash=None,
+                    generation_latency_ms=None,
+                    output_guard_safe=None,
+                    fallback_reason="generation_error",
+                )
+            )
             return False
 
         guard_result = self._output_guard.validate(
@@ -105,6 +129,38 @@ class ThreadedShadowAnswerRunner:
                 else f"output_guard:{guard_result.reason}"
             ),
         )
+        return self._persist_review(
+            ShadowReviewInput(
+                turn_id=task.turn_id,
+                knowledge_id=evidence.knowledge_id,
+                knowledge_version=evidence.knowledge_version,
+                source_id=evidence.source_id,
+                standard_answer=evidence.standard_answer,
+                prohibited_extensions=evidence.prohibited_extensions,
+                generated_answer=generated.answer,
+                generation_model_id=generated.model_id,
+                prompt_version=generated.prompt_version,
+                prompt_hash=generated.prompt_hash,
+                generation_latency_ms=generated.latency_ms,
+                output_guard_safe=guard_result.safe,
+                fallback_reason=(
+                    "shadow_only"
+                    if guard_result.safe
+                    else f"output_guard:{guard_result.reason}"
+                ),
+            )
+        )
+
+    def _persist_review(self, item: ShadowReviewInput) -> bool:
+        if self._review_writer is None:
+            return True
+        try:
+            self._review_writer.record(item)
+        except Exception:
+            logging.getLogger("sva.shadow").exception(
+                "shadow review persistence failed"
+            )
+            return False
         return True
 
     def _release(

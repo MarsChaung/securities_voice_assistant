@@ -1,5 +1,7 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -17,9 +19,11 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
 from answer_contract import TurnFeedback, TurnRequest, TurnResponse
-from observability import configure_logging
+from observability import DatabaseShadowReviewRepository, configure_logging
 from retrieval import (
+    EmbeddingServiceError,
     HybridKnowledgeRetriever,
+    KnowledgeRepositoryError,
     LexicalKnowledgeRetriever,
     OpenAICompatibleEmbeddingClient,
     SqlKnowledgeRepository,
@@ -97,18 +101,25 @@ def create_app(
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level)
     shadow_runner: ThreadedShadowAnswerRunner | None = None
+    knowledge_repository: SqlKnowledgeRepository | None = None
+    knowledge_retriever: LexicalKnowledgeRetriever | HybridKnowledgeRetriever | None = None
     if service is None:
         answer_composer = _build_answer_composer(resolved_settings)
         if resolved_settings.answer_mode == "shadow_llm" and answer_composer is not None:
             shadow_runner = ThreadedShadowAnswerRunner(
                 composer=answer_composer,
+                review_writer=DatabaseShadowReviewRepository.from_url(
+                    resolved_settings.database_url
+                ),
                 max_pending=resolved_settings.shadow_max_pending,
             )
+        knowledge_repository = SqlKnowledgeRepository.from_url(
+            resolved_settings.database_url
+        )
+        knowledge_retriever = _build_knowledge_retriever(resolved_settings)
         resolved_service = TurnService(
-            knowledge_repository=SqlKnowledgeRepository.from_url(
-                resolved_settings.database_url
-            ),
-            knowledge_retriever=_build_knowledge_retriever(resolved_settings),
+            knowledge_repository=knowledge_repository,
+            knowledge_retriever=knowledge_retriever,
             answer_mode=resolved_settings.answer_mode,
             answer_composer=(
                 answer_composer
@@ -143,6 +154,23 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if (
+            knowledge_repository is not None
+            and isinstance(knowledge_retriever, HybridKnowledgeRetriever)
+        ):
+            try:
+                documents = knowledge_repository.eligible_documents(
+                    at=datetime.now(UTC)
+                )
+                warmed = knowledge_retriever.warm(documents)
+                logging.getLogger("sva.retrieval").info(
+                    "embedding warmup complete representations=%d",
+                    warmed,
+                )
+            except (EmbeddingServiceError, KnowledgeRepositoryError):
+                logging.getLogger("sva.retrieval").warning(
+                    "embedding warmup incomplete; runtime will fail safe"
+                )
         yield
         if shadow_runner is not None:
             shadow_runner.close()
@@ -218,6 +246,7 @@ def create_app(
                     "voice": resolved_voice_service.models.voice,
                     "voice_clone": resolved_voice_service.voice_clone_enabled,
                 },
+                "asr_context": resolved_service.voice_asr_context(),
             }
         )
 
@@ -227,7 +256,7 @@ def create_app(
             raise HTTPException(503, "語音服務目前未啟用。")
         turn = await run_in_threadpool(
             resolved_service.evaluate,
-            TurnRequest(transcript=request.transcript, channel="web"),
+            TurnRequest(transcript=request.transcript, channel="voice"),
         )
 
         async def stream() -> AsyncIterator[bytes]:

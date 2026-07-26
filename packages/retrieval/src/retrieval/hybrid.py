@@ -4,12 +4,14 @@ from collections.abc import Sequence
 from threading import Lock
 
 from .embeddings import EmbeddingProvider, EmbeddingServiceError, EmbeddingVector
-from .models import KnowledgeDocument, RetrievalMatch
+from .models import KnowledgeDocument, QuestionVariantUsage, RetrievalMatch
 from .search import LexicalKnowledgeRetriever
 
 
 class HybridKnowledgeRetriever:
     """以詞彙與本機 embedding 分數排序；embedding 故障時退回既有詞彙檢索。"""
+
+    _WARMUP_BATCH_SIZE = 8
 
     def __init__(
         self,
@@ -40,6 +42,42 @@ class HybridKnowledgeRetriever:
         self._ambiguity_margin = ambiguity_margin
         self._embedding_cache: dict[str, EmbeddingVector] = {}
         self._cache_lock = Lock()
+        self._warmup_lock = Lock()
+
+    def warm(self, documents: Sequence[KnowledgeDocument]) -> int:
+        """分批預熱文件向量；每批成功後立即保留，避免大型批次逾時後全部重算。"""
+        warmed = 0
+        with self._warmup_lock:
+            representations = tuple(
+                (
+                    _cache_key(document, document_text),
+                    document_text,
+                )
+                for document in documents
+                for document_text in (
+                    f"{self._document_prefix}{text}"
+                    for text in _document_texts(document)
+                )
+            )
+            with self._cache_lock:
+                missing = tuple(
+                    representation
+                    for representation in representations
+                    if representation[0] not in self._embedding_cache
+                )
+
+            for offset in range(0, len(missing), self._WARMUP_BATCH_SIZE):
+                batch = missing[offset : offset + self._WARMUP_BATCH_SIZE]
+                embedded = self._embedder.embed(tuple(text for _, text in batch))
+                if len(embedded) != len(batch):
+                    raise EmbeddingServiceError(
+                        "embedding provider returned unexpected vector count"
+                    )
+                with self._cache_lock:
+                    for (key, _), vector in zip(batch, embedded, strict=True):
+                        self._embedding_cache[key] = vector
+                warmed += len(batch)
+        return warmed
 
     def search(
         self,
@@ -108,7 +146,10 @@ class HybridKnowledgeRetriever:
                             min(
                                 1.0,
                                 lexical_match.score * self._lexical_weight
-                                + _cosine_similarity(query_vector, document_vector)
+                                + max(
+                                    _cosine_similarity(query_vector, representation)
+                                    for representation in document_vector
+                                )
                                 * self._semantic_weight,
                             ),
                             4,
@@ -128,44 +169,41 @@ class HybridKnowledgeRetriever:
         self,
         query: str,
         documents: Sequence[KnowledgeDocument],
-    ) -> tuple[EmbeddingVector, tuple[EmbeddingVector, ...]]:
+    ) -> tuple[EmbeddingVector, tuple[tuple[EmbeddingVector, ...], ...]]:
+        self.warm(documents)
         document_texts = tuple(
-            f"{self._document_prefix}{_document_text(document)}" for document in documents
+            tuple(
+                f"{self._document_prefix}{text}"
+                for text in _document_texts(document)
+            )
+            for document in documents
         )
         cache_keys = tuple(
-            _cache_key(document, document_text)
-            for document, document_text in zip(documents, document_texts, strict=True)
+            tuple(_cache_key(document, document_text) for document_text in texts)
+            for document, texts in zip(documents, document_texts, strict=True)
         )
         with self._cache_lock:
-            cached_vectors = tuple(self._embedding_cache.get(key) for key in cache_keys)
-
-        missing = tuple(
-            (index, document)
-            for index, (document, vector) in enumerate(zip(documents, cached_vectors, strict=True))
-            if vector is None
-        )
-        embedded = self._embedder.embed(
-            (
-                f"{self._query_prefix}{query}",
-                *(document_texts[index] for index, _ in missing),
+            cached_vectors = tuple(
+                tuple(self._embedding_cache.get(key) for key in keys)
+                for keys in cache_keys
             )
-        )
-        if len(embedded) != len(missing) + 1:
+
+        embedded = self._embedder.embed((f"{self._query_prefix}{query}",))
+        if len(embedded) != 1:
             raise EmbeddingServiceError("embedding provider returned unexpected vector count")
 
         query_vector = embedded[0]
-        resolved_vectors = list(cached_vectors)
-        with self._cache_lock:
-            for (index, _), vector in zip(missing, embedded[1:], strict=True):
-                self._embedding_cache[cache_keys[index]] = vector
-                resolved_vectors[index] = vector
+        if any(vector is None for vectors in cached_vectors for vector in vectors):
+            raise EmbeddingServiceError("embedding cache returned incomplete vectors")
+        return query_vector, tuple(
+            tuple(vector for vector in vectors if vector is not None)
+            for vectors in cached_vectors
+        )
 
-        return query_vector, tuple(vector for vector in resolved_vectors if vector is not None)
 
-
-def _document_text(document: KnowledgeDocument) -> str:
+def _document_texts(document: KnowledgeDocument) -> tuple[str, ...]:
     item = document.item
-    return "\n".join(
+    base_text = "\n".join(
         (
             item.title,
             item.standard_answer,
@@ -173,6 +211,14 @@ def _document_text(document: KnowledgeDocument) -> str:
             " ".join(item.platforms),
             item.source_locator,
         )
+    )
+    return (
+        base_text,
+        *(
+            variant.question_text
+            for variant in item.question_variants
+            if variant.usage is QuestionVariantUsage.RETRIEVAL
+        ),
     )
 
 

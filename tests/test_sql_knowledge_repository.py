@@ -5,8 +5,16 @@ from sqlalchemy import update
 
 from knowledge_admin.database import KnowledgeSourceRecord
 from knowledge_admin.governance import GovernanceAction, GovernanceActor, KnowledgeRole
-from knowledge_admin.repository import DatabaseKnowledgeRepository, GovernancePayload
-from retrieval import KnowledgeRepositoryError, SqlKnowledgeRepository
+from knowledge_admin.repository import (
+    DatabaseKnowledgeRepository,
+    GovernancePayload,
+    QuestionVariantInput,
+)
+from retrieval import (
+    KnowledgeRepositoryError,
+    QuestionVariantUsage,
+    SqlKnowledgeRepository,
+)
 
 
 def actor(actor_id: str, role: KnowledgeRole) -> GovernanceActor:
@@ -20,6 +28,18 @@ def test_sql_repository_only_returns_runtime_eligible_documents(
     assert runtime_repository.eligible_documents(at=datetime(2026, 7, 20, tzinfo=UTC)) == ()
 
     current = knowledge_store.get_item("K-CATHAY-DCA-001")
+    current = knowledge_store.update_question_variants(
+        knowledge_id=current.item.knowledge_id,
+        variants=(
+            QuestionVariantInput(
+                variant_id=None,
+                question_text="每月固定投入台股的方式是什麼？",
+                usage=QuestionVariantUsage.RETRIEVAL,
+            ),
+        ),
+        actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+        expected_version=current.row_version,
+    )
     submitted = knowledge_store.perform_action(
         knowledge_id=current.item.knowledge_id,
         action=GovernanceAction.SUBMIT_REVIEW,
@@ -55,6 +75,9 @@ def test_sql_repository_only_returns_runtime_eligible_documents(
 
     assert [document.item.knowledge_id for document in eligible] == ["K-CATHAY-DCA-001"]
     assert eligible[0].source.source_id == "SRC-CATHAY-DCA-001"
+    assert eligible[0].item.question_variants[0].question_text == (
+        "每月固定投入台股的方式是什麼？"
+    )
     assert overdue == ()
 
     with knowledge_store.engine.begin() as connection:

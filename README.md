@@ -1,6 +1,6 @@
 # 證券知識型語音客服
 
-本 repository 是 `SYSTEM_PLAN.md` 的初始工程基礎。目前目標場景為內部 Web Pilot，已完成安全決策管線、知識治理資料庫、核准知識檢索、結構化 LLM 意圖路由、背景 Shadow 答案評測，以及全地端即時 ASR／串流 TTS 的文字與語音問答介面；客戶資料系統不在 Pilot 連線範圍。
+本 repository 是 `SYSTEM_PLAN.md` 的初始工程基礎。目前目標場景為內部 Web Pilot，已完成安全決策管線、知識治理資料庫、核准知識檢索、結構化 LLM 意圖路由、背景 Shadow 答案評測與人工複核工作台，以及全地端即時 ASR／串流 TTS 的文字與語音問答介面；客戶資料系統不在 Pilot 連線範圍。
 
 ## 目前行為
 
@@ -12,7 +12,7 @@
 4. 檢索符合條件的已發布知識。
 5. 依回答模式產生 `answer | refuse | handoff` 結構化合約。
 
-允許範圍的問題只會檢索 PostgreSQL 中有效的 `published` 知識，通過意圖、平台、最低分數及歧義門檻後，回傳人工核准內容與官方來源引用。檢索預設使用可解釋的詞彙模式，也可在模型通過離線評測後切換成本機 embeddings 的混合模式。沒有可靠匹配時安全拒答，不會使用模型自身知識補答。
+允許範圍的問題只會檢索 PostgreSQL 中有效的 `published` 知識，通過意圖、平台、最低分數及歧義門檻後，回傳人工核准內容與可追溯來源。本機匯入來源可不具正式網址，但保留批次、檔案雜湊與列號定位。檢索預設使用可解釋的詞彙模式，也可在模型通過離線評測後切換成本機 embeddings 的混合模式。沒有可靠匹配時安全拒答，不會使用模型自身知識補答。
 
 回答模式程式預設為 `exact`，直接回傳人工核准標準答案。內部 Pilot 目前使用 `shadow_llm`：API 先回傳核准原文，再由單工背景佇列執行有限改寫與輸出守門；同一知識版本在程序內只評測一次，避免重複占用本機推論資源。`controlled_llm` 才會在守門通過時使用改寫答案；生成失敗、逾時、格式錯誤，或偵測到新增數字、未授權產品詞、投資建議、提示詞洩漏、機敏資料及禁止延伸時，一律回退標準答案。`fixed_message` 是緊急安全模式。詳見 [ADR-0003](docs/architecture_decisions/0003-controlled-answer-generation.md) 與 [ADR-0005](docs/architecture_decisions/0005-shadow-answer-generation.md)。
 
@@ -23,6 +23,8 @@
 ## 初始知識資料
 
 `knowledge/` 已登錄四個國泰綜合證券官方頁面，並整理成可追溯的初始知識草稿。檔案匯入資料預設為 `draft` 且 `public_answer_allowed=false`；資料庫中只有完成核准、尚未過期且未超過複審到期時間的 `published` 項目才可能進入 runtime。
+
+FAQ 採「一筆標準答案＋多筆問句變體」共同治理。作者可在草稿狀態編輯標題、標準答案，並新增、修改、刪除或分類問句變體；送審與發布以整項知識為單位。只有標記為正式檢索的問句會進入 Runtime，僅供評測或排除的問句不影響線上排序。發布版建立新版時，標準答案與問句變體會一起保存為不可變快照。詳見 [ADR-0008](docs/architecture_decisions/0008-governed-faq-question-variants.md)。
 
 目前不保存整頁 HTML，並排除行銷標的推薦、歷史績效、密碼與個人帳務內容。詳細範圍請見 `knowledge/README.md`。
 
@@ -42,7 +44,7 @@ API 文件：<http://127.0.0.1:8080/docs>
 
 本機 LLM 推論平台管理介面：<http://127.0.0.1:12345/admin>。管理密碼只保存在被 Git 忽略的 `.env` 變數 `SVA_LLM_ADMIN_PASSWORD`；若 embeddings 或其他本機模型尚未安裝，可從該管理介面下載。
 
-Pilot 會顯示目前可回答知識筆數，並呈現答案、拒答或轉人工狀態、官方來源、決策資訊及二元回饋。啟用語音服務後，麥克風按鈕會使用 MLX Audio 即時 ASR 自動判斷句尾，將辨識文字送入同一安全決策管線，再串流播放核准答案；播放期間按麥克風可中斷並繼續說話。瀏覽器不使用 localStorage 保存問答內容，重新整理或按下「清除畫面」就會移除畫面中的對話。
+Pilot 會顯示目前可回答知識筆數，並呈現答案、澄清、拒答或轉人工狀態、官方來源、決策資訊及二元回饋。啟用語音服務後，麥克風按鈕會使用 MLX Audio 即時 ASR 自動判斷句尾，並以當下有效知識的標題與產品名稱提供領域詞彙提示。辨識文字會進入同一安全決策管線；安全問題若一般檢索無結果，可再以受控音近候選比對核准知識，唯一高信心候選才回答，有歧義則要求重述。播放期間按麥克風可中斷並繼續說話。瀏覽器不使用 localStorage 保存問答內容，重新整理或按下「清除畫面」就會移除畫面中的對話。詳見 [ADR-0010](docs/architecture_decisions/0010-governed-asr-phonetic-recovery.md)。
 
 知識治理中心使用 PostgreSQL 保存治理狀態。先啟動資料庫、升級 schema 並匯入初始草稿：
 
@@ -55,7 +57,9 @@ uv run uvicorn knowledge_admin.api:app --host 127.0.0.1 --reload --port 8081
 
 管理介面：<http://127.0.0.1:8081/admin/knowledge>
 
-介面可用開發身分模擬器操作 4 個官方來源與 15 筆知識草稿，並執行送審、完成審核、核准、發布、退回及撤銷。模擬身分只允許在 development 使用；正式 SSO/RBAC 仍留待公司環境整合。
+Shadow 複核工作台：<http://127.0.0.1:8081/admin/shadow>
+
+介面可用開發身分模擬器操作 4 個官方來源與 15 筆知識草稿，編輯標準答案與問句變體，並執行送審、完成審核、核准、發布、退回及撤銷。模擬身分只允許在 development 使用；正式 SSO/RBAC 仍留待公司環境整合。
 
 `published` 且已生效、未過期、未超過複審到期時間的知識會立即成為 orchestrator 候選資料；撤銷後不再進入 Runtime。已超過複審到期時間的發布項目可由原作者建立下一版草稿，系統會先保存不可變的舊發布版快照，再重新執行送審、核准與發布。
 
@@ -84,7 +88,9 @@ SVA_SHADOW_MAX_PENDING=8
 SVA_LLM_API_KEY=<local-api-key>
 ```
 
-生成器只接收標準答案、禁止延伸與知識中繼資料，不接收原始使用者問題。主要 turn 稽核只記 `shadow_queued`、`shadow_cached` 或 `shadow_queue_full`；背景完成後另記不含答案全文的 `shadow_generation` 事件。15 筆知識的離線評測為輸出守門 15/15、獨立 groundedness judge 15/15；8 筆有改寫、7 筆保留原文。Judge 使用 `gemma-4-31b-it-6bit`，只在離線評測執行，不參與線上回答。
+生成器只接收標準答案、禁止延伸與知識中繼資料，不接收原始使用者問題。主要 turn 稽核只記 `shadow_queued`、`shadow_cached` 或 `shadow_queue_full`；背景完成後另記不含答案全文的 `shadow_generation` 事件。專用 Shadow 複核資料表會保存標準答案快照、模型改寫與人工標記，但不保存原始問句或音訊，並與一般技術 Log 分離。管理介面可查看待複核、可接受、不採用、無法產生、輸出守門與延遲統計；人工複核不能直接啟用 `controlled_llm`。詳細設計見 [ADR-0007](docs/architecture_decisions/0007-shadow-review-workbench.md)。
+
+15 筆知識的離線評測為輸出守門 15/15、獨立 groundedness judge 15/15；8 筆有改寫、7 筆保留原文。Judge 使用 `gemma-4-31b-it-6bit`，只在離線評測執行，不參與線上回答。
 
 `controlled_llm` 只負責依核准內容改寫，與意圖路由是不同開關。目前內部 Pilot 的意圖模型為 `Qwen3.6-35B-A3B-oQ4`，44 筆擴充評測為安全意圖 29/29、風險辨識 15/15，平均延遲約 1.91 秒、P95 約 2.17 秒。可用下列設定啟用：
 

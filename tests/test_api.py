@@ -24,6 +24,8 @@ from retrieval import (
     KnowledgeItem,
     KnowledgeRepositoryError,
     LocalKnowledgeRepository,
+    QuestionVariant,
+    QuestionVariantUsage,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -266,6 +268,127 @@ def test_phone_channel_is_not_available_in_internal_web_pilot() -> None:
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("transcript", ["什麼是甲竹全席", "什麼是甲雛全息"])
+def test_voice_phonetic_recovery_answers_governed_knowledge(transcript: str) -> None:
+    base = published_document()
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-ASR-001",
+                "title": "假除權息說明",
+                "standard_answer": "這是假除權息的核准說明。",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="asr-false-ex-rights",
+                        question_text="阿發，請問什麼是假除權息？",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base.source,
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": transcript, "channel": "voice"},
+    )
+
+    result = response.json()["result"]
+    assert result["decision"] == "answer"
+    assert result["policy_rule_id"] == "ASR-PHONETIC-001"
+    assert result["answer_id"] == "K-FAQ-ASR-001"
+
+
+def test_text_channel_never_applies_phonetic_recovery() -> None:
+    base = published_document()
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-ASR-001",
+                "title": "假除權息說明",
+                "allowed_intents": ["faq_general_guidance"],
+            }
+        ),
+        source=base.source,
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "什麼是甲雛全息", "channel": "web"},
+    )
+
+    assert response.json()["result"]["policy_rule_id"] == "KNO-001"
+
+
+def test_voice_phonetic_recovery_never_overrides_a_hard_refusal() -> None:
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((published_document(),)),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "請幫我買進台積電", "channel": "voice"},
+    )
+
+    result = response.json()["result"]
+    assert result["decision"] == "refuse"
+    assert result["policy_rule_id"] == "POL-REFUSE-001"
+
+
+def test_voice_phonetic_recovery_asks_for_clarification_when_ambiguous() -> None:
+    base = published_document()
+
+    def document(knowledge_id: str, title: str) -> KnowledgeDocument:
+        return KnowledgeDocument(
+            item=base.item.model_copy(
+                update={
+                    "knowledge_id": knowledge_id,
+                    "title": title,
+                    "allowed_intents": ["faq_general_guidance"],
+                    "question_variants": [
+                        QuestionVariant(
+                            variant_id=f"{knowledge_id}-variant",
+                            question_text="什麼是假除權息？",
+                            usage=QuestionVariantUsage.RETRIEVAL,
+                        )
+                    ],
+                }
+            ),
+            source=base.source,
+        )
+
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository(
+            (
+                document("K-FAQ-ASR-001", "假除權息說明"),
+                document("K-FAQ-ASR-002", "假除權息介紹"),
+            )
+        ),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "什麼是甲雛全息", "channel": "voice"},
+    )
+
+    result = response.json()["result"]
+    assert result["decision"] == "clarify"
+    assert result["policy_rule_id"] == "ASR-PHONETIC-002"
+    assert result["answer_id"] is None
 
 
 def test_app_tutorial_is_allowed_but_still_requires_approved_knowledge() -> None:
@@ -565,6 +688,99 @@ def test_controlled_intent_router_recovers_account_opening_paraphrases(
     assert result["intent"] == "account_opening_general"
     assert result["policy_rule_id"] == "LLM-ALLOW-001"
     assert result["answer_id"] == "K-CATHAY-US-001"
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "我手機變了,要怎麼作補發密碼",
+        "我換手機了，怎麼補發密碼",
+    ],
+)
+def test_public_password_reissue_guidance_bypasses_credential_risk_router(
+    transcript: str,
+) -> None:
+    base_document = published_document()
+    document = KnowledgeDocument(
+        item=base_document.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-PASSWORD-001",
+                "title": "手機號碼變更及補發密碼方式",
+                "standard_answer": "請依核准的臨櫃或書面流程辦理。",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="password-reissue",
+                        question_text=transcript,
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base_document.source,
+    )
+    router = StaticIntentRouter(
+        candidate_intents=["unknown"],
+        risk_flags=["credential_or_sensitive_data"],
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    result = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": transcript, "channel": "web"},
+    ).json()["result"]
+
+    assert result["decision"] == "answer"
+    assert result["intent"] == "credential_recovery_guidance"
+    assert result["answer_id"] == "K-FAQ-PASSWORD-001"
+    assert router.questions == []
+
+
+def test_public_account_authorization_guidance_bypasses_credential_risk_router() -> None:
+    base_document = published_document()
+    document = KnowledgeDocument(
+        item=base_document.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-AUTHORIZATION-001",
+                "title": "委任授權說明",
+                "standard_answer": "申請帳戶授權他人買賣，須依核准的臨櫃流程辦理。",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="account-authorization",
+                        question_text="我的帳戶授權給別人",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base_document.source,
+    )
+    router = StaticIntentRouter(
+        candidate_intents=["account_opening_general"],
+        risk_flags=["credential_or_sensitive_data"],
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    result = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "怎麼把我的帳戶授權給別人", "channel": "web"},
+    ).json()["result"]
+
+    assert result["decision"] == "answer"
+    assert result["intent"] == "account_authorization_guidance"
+    assert result["answer_id"] == "K-FAQ-AUTHORIZATION-001"
+    assert router.questions == []
 
 
 def test_hard_refusal_never_calls_intent_router() -> None:

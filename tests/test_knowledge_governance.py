@@ -1,4 +1,7 @@
+from datetime import UTC, datetime
+
 import pytest
+from pydantic import ValidationError
 
 from knowledge_admin.governance import (
     GovernanceAction,
@@ -7,7 +10,7 @@ from knowledge_admin.governance import (
     GovernancePolicy,
     KnowledgeRole,
 )
-from retrieval import KnowledgeItem, KnowledgeStatus
+from retrieval import KnowledgeItem, KnowledgeSource, KnowledgeStatus
 
 
 def make_item(**changes: object) -> KnowledgeItem:
@@ -32,6 +35,41 @@ def make_item(**changes: object) -> KnowledgeItem:
 
 def actor(actor_id: str, *roles: KnowledgeRole) -> GovernanceActor:
     return GovernanceActor(actor_id=actor_id, roles=frozenset(roles))
+
+
+def test_local_import_source_and_item_allow_empty_formal_url() -> None:
+    source = KnowledgeSource(
+        source_id="SRC-LOCAL-001",
+        supplied_url=None,
+        canonical_url=None,
+        title="本機 FAQ 匯入",
+        publisher="客戶服務處",
+        source_type="local_import",
+        retrieved_at=datetime(2026, 7, 24, tzinfo=UTC),
+        topics=["內部 FAQ"],
+    )
+    item = make_item(
+        source_id=source.source_id,
+        source_uri=None,
+        source_type="local_import",
+    )
+
+    assert source.canonical_url is None
+    assert item.source_uri is None
+
+
+def test_non_local_source_still_requires_formal_url() -> None:
+    with pytest.raises(ValidationError, match="必須提供 HTTPS URL"):
+        KnowledgeSource(
+            source_id="SRC-FAQ-001",
+            supplied_url=None,
+            canonical_url=None,
+            title="核准內部 FAQ",
+            publisher="客戶服務處",
+            source_type="approved_internal_faq",
+            retrieved_at=datetime(2026, 7, 24, tzinfo=UTC),
+            topics=["內部 FAQ"],
+        )
 
 
 def test_author_can_submit_own_draft_for_review() -> None:

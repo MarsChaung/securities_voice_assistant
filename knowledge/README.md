@@ -9,6 +9,8 @@
 - Runtime loader 只會傳回 `published`、來源有效、已生效、未過期且未超過複審到期時間的項目。
 - 未完成 Maker–Checker 角色核准前，不得將草稿改成 `published`。
 - App 操作草稿若未指定適用版本，不得升為 `approved` 或 `published`。
+- FAQ 可在 `question_variants` 保存多種問法；只有 `retrieval` 用途會進入 Runtime，
+  `evaluation_only` 與 `excluded` 只保留於治理內容。
 
 ## 本次排除內容
 

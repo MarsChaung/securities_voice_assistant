@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}FAQ 匯入預覽{% endblock %}
+{% block content %}
+  <a class="back" href="/admin/faq-imports">← 返回 FAQ 匯入</a>
+  <section class="detail-heading">
+    <div>
+      <p class="eyebrow">FAQ IMPORT PREVIEW</p>
+      <h1>{{ batch.dataset_title }}</h1>
+      <p>{{ batch.original_filename }} · 工作表 {{ batch.sheet_name }}</p>
+    </div>
+    <div class="heading-meta">
+      <span class="status faq-import-{{ batch.status.value }}">{{ faq_import_status_labels[batch.status] }}</span>
+      <code>{{ batch.batch_id }}</code>
+    </div>
+  </section>
+
+  {% if notice %}<div class="flash flash-success">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+  <section class="report-strip import-summary">
+    <div><span>解析項目</span><strong>{{ batch.row_count }}</strong></div>
+    <div><span>可匯入</span><strong>{{ batch.valid_row_count }}</strong></div>
+    <div><span>略過／需修正</span><strong>{{ batch.row_count - batch.valid_row_count }}</strong></div>
+    <div><span>已建立草稿</span><strong>{{ batch.imported_count }}</strong></div>
+    <div><span>檔案 SHA-256</span><strong class="hash-value">{{ batch.file_sha256[:12] }}…</strong></div>
+  </section>
+
+  <section class="panel import-source-panel">
+    <p class="panel-label">TRACEABILITY</p>
+    <h2>來源追溯</h2>
+    <dl class="metadata">
+      <div><dt>發布單位</dt><dd>{{ batch.publisher }}</dd></div>
+      <div><dt>資料來源</dt><dd>{{ "本機匯入" if batch.source_type == "local_import" else "核准內部 FAQ" }}</dd></div>
+      <div><dt>正式網址</dt><dd>{% if batch.source_url %}<a href="{{ batch.source_url }}" target="_blank" rel="noreferrer">{{ batch.source_url }}</a>{% else %}無（以匯入批次與檔案雜湊追溯）{% endif %}</dd></div>
+      <div><dt>來源編號</dt><dd><code>{{ batch.source_id }}</code></dd></div>
+      <div><dt>建立者</dt><dd>{{ batch.uploaded_by }}</dd></div>
+    </dl>
+  </section>
+
+  <form method="post" action="/admin/faq-imports/{{ batch.batch_id }}/commit">
+    <input type="hidden" name="expected_version" value="{{ batch.row_version }}">
+    <section class="table-card import-preview-table">
+      <div class="panel-heading">
+        <div><p class="panel-label">PARSED ITEMS</p><h2>知識草稿預覽</h2></div>
+        {% if batch.status.value == "preview" %}
+          <label class="inline-actor">確認建立者
+            <select name="actor_id" required>
+              {% for actor in authors %}
+                <option value="{{ actor.actor_id }}" {% if actor.actor_id == batch.uploaded_by %}selected{% endif %}>{{ actor.actor_id }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        {% endif %}
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>選取</th><th>知識草稿</th><th>問句變體</th><th>檢查結果</th></tr></thead>
+          <tbody>
+            {% for row in batch.rows %}
+              <tr class="{% if row.errors or row.duplicate_knowledge_ids %}import-row-invalid{% endif %}">
+                <td class="selection-cell">
+                  {% if batch.status.value == "preview" and row.is_actionable %}
+                    <input type="checkbox" name="selected_row_id" value="{{ row.row_id }}" checked aria-label="選取 {{ row.proposed_knowledge_id }}">
+                  {% else %}—{% endif %}
+                </td>
+                <td>
+                  <strong>{{ row.title }}</strong>
+                  <small>{{ row.proposed_knowledge_id }} · Excel 第 {{ row.sheet_row }} 列{% if row.source_item_no %} · 項次 {{ row.source_item_no }}{% endif %}</small>
+                  <details><summary>查看標準答案</summary><p class="preview-answer">{{ row.standard_answer or "（空白）" }}</p></details>
+                </td>
+                <td>
+                  <strong>{{ row.questions|length }} 筆</strong>
+                  <details><summary>查看問句</summary>
+                    <ol class="preview-question-list">{% for question in row.questions %}<li>{{ question }}</li>{% endfor %}</ol>
+                  </details>
+                </td>
+                <td>
+                  {% for item in row.errors %}<span class="import-message import-error">{{ item }}</span>{% endfor %}
+                  {% for item in row.warnings %}<span class="import-message import-warning">{{ item }}</span>{% endfor %}
+                  {% if row.is_actionable and not row.warnings %}<span class="import-message import-ok">可建立草稿</span>{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if batch.status.value == "preview" %}
+        <div class="import-confirm">
+          <p>確認後只建立「草稿」，仍須逐筆編輯、審核與發布，才會進入 Runtime 檢索。</p>
+          <button type="submit">確認所選項目並建立草稿</button>
+        </div>
+      {% endif %}
+    </section>
+  </form>
+
+  {% if batch.status.value == "imported" %}
+    <section class="panel imported-links">
+      <p class="panel-label">CREATED DRAFTS</p>
+      <h2>已建立的知識草稿</h2>
+      <ul>
+        {% for row in batch.rows if row.imported %}
+          <li><a href="/admin/knowledge/{{ row.proposed_knowledge_id }}">{{ row.title }}</a></li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+{% endblock %}

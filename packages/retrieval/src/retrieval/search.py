@@ -2,10 +2,11 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .models import KnowledgeDocument, RetrievalMatch
+from .models import KnowledgeDocument, QuestionVariantUsage, RetrievalMatch
 
 _NON_SEARCH_CHARACTERS = re.compile(r"[^0-9a-z\u3400-\u9fff]")
 _QUERY_REPLACEMENTS = (
+    ("如果我想", ""),
     ("定期投資", "定期定額"),
     ("股利自動再投入", "股息再投資"),
     ("股利再次投入", "股息再投資"),
@@ -31,6 +32,11 @@ _QUERY_REPLACEMENTS = (
     ("什麼是", ""),
     ("請說明", ""),
     ("一般", ""),
+)
+_CANONICAL_REPLACEMENTS = (
+    ("甚麼", "什麼"),
+    ("賬戶", "帳戶"),
+    ("帳號", "帳戶"),
 )
 _DOMAIN_TERMS = ("定期定額", "股息再投資", "交割帳戶", "美股", "台股")
 _PLATFORM_TERMS = ("國泰證券app", "樹精靈app", "樹精靈", "web", "網頁版")
@@ -62,7 +68,7 @@ class LexicalKnowledgeRetriever:
         candidates = [
             document
             for document in documents
-            if intent in document.item.allowed_intents
+            if _matches_intent(document, intent)
             and _matches_platform(document, target_platform)
         ]
         return tuple(
@@ -83,21 +89,37 @@ class LexicalKnowledgeRetriever:
         return ranked[0]
 
 
+def _matches_intent(document: KnowledgeDocument, intent: str) -> bool:
+    allowed_intents = document.item.allowed_intents
+    return intent in allowed_intents or "faq_general_guidance" in allowed_intents
+
+
 def _score(query: str, document: KnowledgeDocument) -> float:
     normalized_query = _normalize_query(query)
     normalized_title = _normalize(document.item.title)
     normalized_products = [_normalize(product) for product in document.item.products]
     normalized_locator = _normalize(document.item.source_locator)
-    candidate = normalized_title + "".join(normalized_products) + normalized_locator
+    base_candidate = normalized_title + "".join(normalized_products) + normalized_locator
+    normalized_variants = [
+        _normalize(variant.question_text)
+        for variant in document.item.question_variants
+        if variant.usage is QuestionVariantUsage.RETRIEVAL
+    ]
+    candidates = [base_candidate, *normalized_variants]
+    combined_candidate = "".join(candidates)
 
     query_bigrams = _bigrams(normalized_query)
-    candidate_bigrams = _bigrams(candidate)
     overlap = 0.0
-    if query_bigrams and candidate_bigrams:
-        overlap = (
-            2
-            * len(query_bigrams & candidate_bigrams)
-            / (len(query_bigrams) + len(candidate_bigrams))
+    if query_bigrams:
+        overlap = max(
+            (
+                2
+                * len(query_bigrams & candidate_bigrams)
+                / (len(query_bigrams) + len(candidate_bigrams))
+                for candidate in candidates
+                if (candidate_bigrams := _bigrams(candidate))
+            ),
+            default=0.0,
         )
 
     product_bonus = (
@@ -108,18 +130,21 @@ def _score(query: str, document: KnowledgeDocument) -> float:
     title_bonus = (
         0.15
         if normalized_query
-        and (normalized_query in normalized_title or normalized_title in normalized_query)
+        and any(
+            normalized_query in candidate or candidate in normalized_query
+            for candidate in (normalized_title, *normalized_variants)
+        )
         else 0
     )
     domain_bonus = _shared_term_bonus(
         normalized_query,
-        candidate,
+        combined_candidate,
         terms=_DOMAIN_TERMS,
         bonus=0.1,
     )
     platform_bonus = _shared_term_bonus(
         normalized_query,
-        candidate,
+        combined_candidate,
         terms=_PLATFORM_TERMS,
         bonus=0.1,
     )
@@ -168,7 +193,10 @@ def _normalize_query(value: str) -> str:
 
 
 def _normalize(value: str) -> str:
-    return _NON_SEARCH_CHARACTERS.sub("", value.casefold()).replace("的", "").replace("與", "")
+    normalized = value.casefold()
+    for source, replacement in _CANONICAL_REPLACEMENTS:
+        normalized = normalized.replace(source, replacement)
+    return _NON_SEARCH_CHARACTERS.sub("", normalized).replace("的", "").replace("與", "")
 
 
 def _bigrams(value: str) -> set[str]:
