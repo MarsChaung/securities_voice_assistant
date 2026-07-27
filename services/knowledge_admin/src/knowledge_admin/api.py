@@ -34,6 +34,7 @@ from .faq_import import (
 from .governance import GovernanceAction, GovernanceError, KnowledgeRole
 from .identity import DevelopmentIdentityProvider
 from .repository import (
+    ASRTermInput,
     ConcurrentUpdateError,
     DatabaseKnowledgeRepository,
     GovernancePayload,
@@ -230,6 +231,7 @@ def create_app(
         if action in {
             GovernanceAction.UPDATE_CONTENT,
             GovernanceAction.UPDATE_QUESTION_VARIANTS,
+            GovernanceAction.UPDATE_ASR_TERMS,
         }:
             raise HTTPException(status_code=404, detail="不支援的治理操作")
 
@@ -330,6 +332,46 @@ def create_app(
             return _detail_redirect(knowledge_id, error=str(exc))
 
         return _detail_redirect(knowledge_id, notice="問句變體已儲存")
+
+    @app.post("/admin/knowledge/{knowledge_id}/asr-terms")
+    async def update_asr_terms(
+        request: Request,
+        knowledge_id: str,
+    ) -> RedirectResponse:
+        if not resolved_settings.knowledge_admin_dev_identity_enabled:
+            raise HTTPException(status_code=403, detail="開發身分模式未啟用")
+
+        try:
+            form = await request.form()
+            actor = identities.get_actor(_form_string(form, "actor_id"))
+            expected_version = int(_form_string(form, "expected_version"))
+            terms = _asr_term_inputs(form)
+            if len(terms) > 50:
+                raise ValueError("單一知識項目最多可保存 50 組語音辨識詞彙")
+            guard = SensitiveDataGuard()
+            values = (
+                value
+                for term in terms
+                for value in (term.canonical_term, *term.aliases)
+            )
+            if any(guard.scan(value).has_sensitive_data for value in values):
+                raise ValueError("語音辨識詞彙與 ASR 別名不得包含個資或敏感資訊")
+            knowledge_repository.update_asr_terms(
+                knowledge_id=knowledge_id,
+                terms=terms,
+                actor=actor,
+                expected_version=expected_version,
+                now=resolved_clock(),
+            )
+        except (
+            ConcurrentUpdateError,
+            GovernanceError,
+            KnowledgeNotFoundError,
+            ValueError,
+        ) as exc:
+            return _detail_redirect(knowledge_id, error=str(exc))
+
+        return _detail_redirect(knowledge_id, notice="語音辨識詞彙與 ASR 別名已儲存")
 
     @app.get("/admin/faq-imports", response_class=HTMLResponse)
     def faq_import_list(
@@ -639,17 +681,66 @@ def _question_variant_inputs(form: FormData) -> tuple[QuestionVariantInput, ...]
     return tuple(variants)
 
 
+def _asr_term_inputs(form: FormData) -> tuple[ASRTermInput, ...]:
+    term_ids = _form_strings(form, "term_id")
+    canonical_terms = _form_strings(form, "canonical_term")
+    aliases_texts = _form_strings(form, "aliases_text")
+    if not (len(term_ids) == len(canonical_terms) == len(aliases_texts)):
+        raise ValueError("ASR 詞彙表單格式不正確")
+
+    deleted_ids = set(_form_strings(form, "delete_term_id"))
+    terms = [
+        ASRTermInput(
+            term_id=term_id,
+            canonical_term=canonical_term,
+            aliases=tuple(
+                line
+                for line in (line.strip() for line in aliases_text.splitlines())
+                if line
+            ),
+        )
+        for term_id, canonical_term, aliases_text in zip(
+            term_ids,
+            canonical_terms,
+            aliases_texts,
+            strict=True,
+        )
+        if term_id not in deleted_ids
+    ]
+
+    new_canonical = _form_string(form, "new_canonical_term", default="").strip()
+    new_aliases = tuple(
+        line
+        for line in (
+            line.strip()
+            for line in _form_string(form, "new_aliases_text", default="").splitlines()
+        )
+        if line
+    )
+    if new_aliases and not new_canonical:
+        raise ValueError("新增 ASR 別名前必須填寫語音辨識詞彙")
+    if new_canonical:
+        terms.append(
+            ASRTermInput(
+                term_id=None,
+                canonical_term=new_canonical,
+                aliases=new_aliases,
+            )
+        )
+    return tuple(terms)
+
+
 def _form_strings(form: FormData, key: str) -> list[str]:
     values = form.getlist(key)
     if any(not isinstance(value, str) for value in values):
-        raise ValueError("問句變體表單格式不正確")
+        raise ValueError("表單格式不正確")
     return [value for value in values if isinstance(value, str)]
 
 
 def _form_string(form: FormData, key: str, *, default: str | None = None) -> str:
     value = form.get(key, default)
     if not isinstance(value, str):
-        raise ValueError("問句變體表單格式不正確")
+        raise ValueError("表單格式不正確")
     return value
 
 
@@ -723,6 +814,11 @@ def _filter_items(
                 normalized_query in variant.question_text.casefold()
                 for variant in item.question_variants
             )
+            or any(
+                normalized_query in value.casefold()
+                for term in item.asr_terms
+                for value in (term.canonical_term, *term.aliases)
+            )
         )
     ]
 
@@ -739,7 +835,9 @@ _STATUS_LABELS = {
 _ACTION_LABELS = {
     GovernanceAction.UPDATE_CONTENT: "更新標題與標準答案",
     GovernanceAction.UPDATE_QUESTION_VARIANTS: "更新問句變體",
+    GovernanceAction.UPDATE_ASR_TERMS: "更新語音辨識詞彙",
     GovernanceAction.START_REVISION: "建立複審新版",
+    GovernanceAction.START_REVOKED_REVISION: "由已撤銷版本建立修訂草稿",
     GovernanceAction.SUBMIT_REVIEW: "送交審核",
     GovernanceAction.COMPLETE_REVIEW: "完成審核",
     GovernanceAction.APPROVE: "核准",

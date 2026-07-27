@@ -64,6 +64,7 @@ _items = Table(
     Column("public_answer_allowed", Boolean),
     Column("allowed_intents", JSON),
     Column("prohibited_extensions", JSON),
+    Column("asr_terms", JSON),
 )
 _question_variants = Table(
     "knowledge_question_variants",
@@ -188,6 +189,7 @@ _ITEM_FIELDS = (
     "public_answer_allowed",
     "allowed_intents",
     "prohibited_extensions",
+    "asr_terms",
 )
 _SOURCE_FIELDS = (
     "source_id",

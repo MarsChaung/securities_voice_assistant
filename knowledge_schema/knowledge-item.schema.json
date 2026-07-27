@@ -63,6 +63,24 @@
           }
         }
       }
+    },
+    "asr_terms": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["term_id", "canonical_term", "aliases"],
+        "properties": {
+          "term_id": {"type": "string", "minLength": 1, "maxLength": 36},
+          "canonical_term": {"type": "string", "minLength": 2, "maxLength": 100},
+          "aliases": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {"type": "string", "minLength": 2, "maxLength": 100}
+          }
+        }
+      }
     }
   },
   "allOf": [

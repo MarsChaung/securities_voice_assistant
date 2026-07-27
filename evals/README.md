@@ -36,3 +36,17 @@ uv run python -m evals.run_answer_generation
 ```
 
 Runner 先完成全部生成，再執行確定性輸出守門與獨立 groundedness 審查；生成文字只暫存在記憶體，不寫入報表或檔案。任何新增事實、遺漏限制、禁止延伸、格式錯誤或模型故障都使評測失敗。
+
+## TTS 模型與分段效能
+
+TTS runner 從已發布且允許回答的知識中，依短、中、長答案各選代表案例。輸出只包含 Knowledge ID、字數、延遲、音訊長度與波形統計，不保存答案或音訊內容。
+
+```bash
+uv run python -m evals.run_tts \
+  --model mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit \
+  --model mlx-community/Qwen3-TTS-12Hz-0.6B-Base-6bit \
+  --segmenter legacy \
+  --segmenter selected_punctuation
+```
+
+runner 會先暖機每個模型，再比較舊版 42 字分段與新版 `，。？、`／換行 80/96 字分段。主要判斷指標是 `real_time_factor`；小於 1 代表生成速度快於音訊播放速度。

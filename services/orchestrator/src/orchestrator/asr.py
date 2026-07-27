@@ -2,6 +2,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from typing import Literal
 
 from pypinyin import Style, lazy_pinyin
 
@@ -11,7 +12,7 @@ from retrieval import (
     RetrievalMatch,
 )
 
-_NON_CJK = re.compile(r"[^\u3400-\u9fff]")
+_NON_TERM = re.compile(r"[^0-9a-z\u3400-\u9fff]")
 _QUESTION_NOISE = (
     "阿發請問",
     "我想知道",
@@ -44,6 +45,7 @@ _TITLE_SUFFIXES = (
 class PhoneticResolution:
     match: RetrievalMatch | None = None
     candidates: tuple[RetrievalMatch, ...] = ()
+    strategy: Literal["alias", "phonetic"] | None = None
 
     @property
     def ambiguous(self) -> bool:
@@ -72,6 +74,31 @@ class MandarinPhoneticResolver:
         query_key = _phonetic_key(query_core)
         if not query_key:
             return PhoneticResolution()
+
+        explicit_matches = tuple(
+            RetrievalMatch(document=document, score=1.0)
+            for document in sorted(
+                documents,
+                key=lambda candidate: candidate.item.knowledge_id,
+            )
+            if _matches_intent(document, intent)
+            and any(
+                _core_text(alias) == query_core
+                for term in document.item.asr_terms
+                for alias in term.aliases
+            )
+        )
+        if len(explicit_matches) == 1:
+            return PhoneticResolution(
+                match=explicit_matches[0],
+                candidates=explicit_matches,
+                strategy="alias",
+            )
+        if len(explicit_matches) > 1:
+            return PhoneticResolution(
+                candidates=explicit_matches[:2],
+                strategy="alias",
+            )
 
         ranked = tuple(
             sorted(
@@ -110,8 +137,12 @@ class MandarinPhoneticResolver:
             and ranked[1].score >= self._minimum_score
             and ranked[0].score - ranked[1].score < self._ambiguity_margin
         ):
-            return PhoneticResolution(candidates=ranked[:2])
-        return PhoneticResolution(match=ranked[0], candidates=ranked[:1])
+            return PhoneticResolution(candidates=ranked[:2], strategy="phonetic")
+        return PhoneticResolution(
+            match=ranked[0],
+            candidates=ranked[:1],
+            strategy="phonetic",
+        )
 
 
 def build_asr_context(
@@ -124,22 +155,33 @@ def build_asr_context(
         return ""
     terms: list[str] = []
     seen: set[str] = set()
+
+    def add_term(value: str) -> bool:
+        normalized = " ".join(value.split()).strip("「」")
+        if len(normalized) < 2 or normalized in seen:
+            return True
+        proposed = "、".join((*terms, normalized))
+        if len(proposed) > max_chars:
+            return False
+        terms.append(normalized)
+        seen.add(normalized)
+        return True
+
+    for document in documents:
+        for asr_term in document.item.asr_terms:
+            if not add_term(asr_term.canonical_term):
+                return "、".join(terms)
     for document in documents:
         title = _strip_title_suffix(document.item.title)
         for term in (title, *document.item.products):
-            normalized = " ".join(term.split()).strip("「」")
-            if len(normalized) < 2 or normalized in seen:
-                continue
-            proposed = "、".join((*terms, normalized))
-            if len(proposed) > max_chars:
+            if not add_term(term):
                 return "、".join(terms)
-            terms.append(normalized)
-            seen.add(normalized)
     return "、".join(terms)
 
 
 def _document_terms(document: KnowledgeDocument) -> tuple[str, ...]:
     return (
+        *(term.canonical_term for term in document.item.asr_terms),
         _strip_title_suffix(document.item.title),
         *(
             variant.question_text
@@ -150,7 +192,7 @@ def _document_terms(document: KnowledgeDocument) -> tuple[str, ...]:
 
 
 def _core_text(value: str) -> str:
-    normalized = _NON_CJK.sub("", value)
+    normalized = _NON_TERM.sub("", value.casefold())
     for phrase in _QUESTION_NOISE:
         normalized = normalized.replace(phrase, "")
     return _strip_title_suffix(normalized)

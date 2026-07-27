@@ -145,6 +145,37 @@ class TurnService:
     def record_feedback(self, *, turn_id: str, rating: str) -> None:
         self._audit_logger.turn_feedback(turn_id=turn_id, rating=rating)
 
+    def record_voice_playback(
+        self,
+        *,
+        turn_id: str,
+        chunk_count: int,
+        audio_duration_ms: float,
+        initial_buffered_ms: float,
+        first_playback_delay_ms: float | None,
+        buffer_target_ms: float,
+        crossfade_ms: float,
+        underrun_count: int,
+        underrun_total_ms: float,
+        underrun_max_ms: float,
+        interrupted: bool,
+        chunk_timings: list[dict[str, float | None]],
+    ) -> None:
+        self._audit_logger.voice_playback(
+            turn_id=turn_id,
+            chunk_count=chunk_count,
+            audio_duration_ms=audio_duration_ms,
+            initial_buffered_ms=initial_buffered_ms,
+            first_playback_delay_ms=first_playback_delay_ms,
+            buffer_target_ms=buffer_target_ms,
+            crossfade_ms=crossfade_ms,
+            underrun_count=underrun_count,
+            underrun_total_ms=underrun_total_ms,
+            underrun_max_ms=underrun_max_ms,
+            interrupted=interrupted,
+            chunk_timings=chunk_timings,
+        )
+
     def voice_asr_context(self) -> str:
         if self._knowledge_repository is None:
             return ""
@@ -377,7 +408,11 @@ class TurnService:
                     result=AnswerContract(
                         decision=Decision.CLARIFY,
                         intent=intent,
-                        policy_rule_id="ASR-PHONETIC-002",
+                        policy_rule_id=(
+                            "ASR-ALIAS-002"
+                            if phonetic.strategy == "alias"
+                            else "ASR-PHONETIC-002"
+                        ),
                         answer=f"我辨識到的內容可能是在詢問{titles}，請再說一次完整問題。",
                         confidence=phonetic.candidates[0].score,
                     ),
@@ -385,7 +420,11 @@ class TurnService:
                 )
             if phonetic.match is not None:
                 match = phonetic.match
-                policy_rule_id = "ASR-PHONETIC-001"
+                policy_rule_id = (
+                    "ASR-ALIAS-001"
+                    if phonetic.strategy == "alias"
+                    else "ASR-PHONETIC-001"
+                )
 
         if match is None:
             return KnowledgeAnswerOutcome(

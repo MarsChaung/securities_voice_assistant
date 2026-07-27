@@ -56,6 +56,7 @@ class KnowledgeItemRecord(Base):
     public_answer_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_intents: Mapped[list[str]] = mapped_column(json_type)
     prohibited_extensions: Mapped[list[str]] = mapped_column(json_type)
+    asr_terms: Mapped[list[dict[str, object]]] = mapped_column(json_type, default=list)
     row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

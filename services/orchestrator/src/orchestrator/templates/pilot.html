@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light">
     <title>證券知識助手｜內部 Web Pilot</title>
     <link rel="stylesheet" href="{{ url_for('pilot-static', path='/pilot.css') }}">
+    <script defer src="{{ url_for('pilot-static', path='/voice-playback.js') }}"></script>
     <script defer src="{{ url_for('pilot-static', path='/pilot.js') }}"></script>
   </head>
   <body>
@@ -110,7 +111,13 @@
             </button>
           </div>
           <div class="composer-meta">
-            <span id="voice-status">按 ⌘／Ctrl + Enter 送出</span>
+            <div class="composer-status">
+              <span id="voice-status">按 ⌘／Ctrl + Enter 送出</span>
+              <label class="asr-model-control" id="asr-model-control" for="asr-model" hidden>
+                ASR
+                <select id="asr-model" aria-label="語音辨識 A/B 模型"></select>
+              </label>
+            </div>
             <span><output id="character-count">0</output> / 4000</span>
           </div>
         </form>

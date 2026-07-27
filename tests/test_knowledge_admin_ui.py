@@ -14,6 +14,7 @@ from observability import (
     ShadowReviewInput,
     ShadowReviewStatus,
 )
+from retrieval import KnowledgeStatus
 
 ORIGIN_HEADERS = {"Origin": "http://testserver"}
 
@@ -206,6 +207,34 @@ def test_draft_question_variants_can_be_managed_from_ui(
     assert "台股定期定額的基本概念" in search.text
 
 
+def test_draft_asr_terms_can_be_managed_from_ui(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    client = make_client(knowledge_store)
+    created = client.post(
+        "/admin/knowledge/K-CATHAY-DCA-001/asr-terms",
+        data={
+            "actor_id": "Codex-assisted draft import",
+            "expected_version": "1",
+            "new_canonical_term": "假除權息",
+            "new_aliases_text": "甲竹全席\n甲雛全息",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    current = knowledge_store.get_item("K-CATHAY-DCA-001")
+    assert current.item.asr_terms[0].aliases == ["甲竹全席", "甲雛全息"]
+    detail = client.get(created.headers["location"])
+    assert "語音辨識詞彙與 ASR 別名已儲存" in detail.text
+    assert "假除權息" in detail.text
+    assert "甲竹全席" in detail.text
+
+    search = client.get("/admin/knowledge", params={"q": "甲雛全息"})
+    assert "台股定期定額的基本概念" in search.text
+
+
 def test_draft_title_and_standard_answer_can_be_edited_from_ui(
     knowledge_store: DatabaseKnowledgeRepository,
 ) -> None:
@@ -279,6 +308,45 @@ def test_overdue_published_item_can_start_revision_from_ui(
     assert "已完成：建立複審新版" in revised_detail.text
     assert "已封存發布版本" in revised_detail.text
     assert "版本 1.0" in revised_detail.text
+
+
+def test_revoked_item_can_start_revision_from_ui(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    knowledge_id = "K-CATHAY-DCA-001"
+    publish_overdue_item(knowledge_store)
+    published = knowledge_store.get_item(knowledge_id)
+    revoked = knowledge_store.perform_action(
+        knowledge_id=knowledge_id,
+        action=GovernanceAction.REVOKE,
+        actor=actor("revoker.dev", KnowledgeRole.REVOKER),
+        expected_version=published.row_version,
+        payload=GovernancePayload(reason="需要修訂 ASR 詞彙"),
+        now=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+    client = make_client(knowledge_store)
+
+    detail = client.get(f"/admin/knowledge/{knowledge_id}")
+    assert "建立修訂草稿" in detail.text
+
+    response = client.post(
+        f"/admin/knowledge/{knowledge_id}/actions/start_revoked_revision",
+        data={
+            "actor_id": "Codex-assisted draft import",
+            "expected_version": str(revoked.row_version),
+            "reason": "新增語音辨識詞彙與 ASR 別名",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    revised = knowledge_store.get_item(knowledge_id)
+    assert revised.item.status is KnowledgeStatus.DRAFT
+    assert revised.item.version == "1.1-draft"
+    updated_detail = client.get(response.headers["location"])
+    assert "儲存語音辨識詞彙" in updated_detail.text
+    assert "由已撤銷版本建立修訂草稿" in updated_detail.text
 
 
 def test_source_list_contains_four_sources(

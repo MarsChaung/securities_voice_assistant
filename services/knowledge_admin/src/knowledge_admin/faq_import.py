@@ -849,6 +849,7 @@ def _item_record(item: KnowledgeItem, now: datetime) -> KnowledgeItemRecord:
         public_answer_allowed=False,
         allowed_intents=item.allowed_intents,
         prohibited_extensions=item.prohibited_extensions,
+        asr_terms=[],
         row_version=1,
         created_at=now,
         updated_at=now,

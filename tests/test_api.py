@@ -19,6 +19,7 @@ from orchestrator.intent_routing import (
 from orchestrator.service import TurnService
 from orchestrator.shadow import ShadowAnswerTask, ShadowSubmitStatus
 from retrieval import (
+    ASRTerm,
     HybridKnowledgeRetriever,
     KnowledgeDocument,
     KnowledgeItem,
@@ -169,13 +170,17 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
     redirect = client.get("/", follow_redirects=False)
     page = client.get("/pilot")
     script = client.get("/pilot/static/pilot.js")
+    playback_script = client.get("/pilot/static/voice-playback.js")
 
     assert redirect.status_code == 307
     assert redirect.headers["location"] == "/pilot"
     assert page.status_code == 200
     assert 'id="question-form"' in page.text
+    assert 'id="asr-model"' in page.text
     assert "不要輸入帳號、密碼、驗證碼或個人資料" in page.text
     assert script.status_code == 200
+    assert playback_script.status_code == 200
+    assert "voice-playback.js" in page.text
     assert "localStorage" not in script.text
 
 
@@ -304,6 +309,41 @@ def test_voice_phonetic_recovery_answers_governed_knowledge(transcript: str) -> 
     result = response.json()["result"]
     assert result["decision"] == "answer"
     assert result["policy_rule_id"] == "ASR-PHONETIC-001"
+    assert result["answer_id"] == "K-FAQ-ASR-001"
+
+
+def test_voice_governed_alias_recovery_is_auditable() -> None:
+    base = published_document()
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-ASR-001",
+                "title": "假除權息說明",
+                "standard_answer": "這是假除權息的核准說明。",
+                "allowed_intents": ["faq_general_guidance"],
+                "asr_terms": [
+                    ASRTerm(
+                        term_id="asr-false-ex-rights",
+                        canonical_term="假除權息",
+                        aliases=["甲竹全席"],
+                    )
+                ],
+            }
+        ),
+        source=base.source,
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    result = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "什麼是甲竹全席", "channel": "voice"},
+    ).json()["result"]
+
+    assert result["decision"] == "answer"
+    assert result["policy_rule_id"] == "ASR-ALIAS-001"
     assert result["answer_id"] == "K-FAQ-ASR-001"
 
 

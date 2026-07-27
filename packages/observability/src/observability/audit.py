@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 
 
@@ -70,6 +71,49 @@ class VoiceSynthesisEvent:
     first_audio_latency_ms: float | None
     total_latency_ms: float
     error_type: str | None
+
+
+@dataclass(frozen=True)
+class VoicePlaybackChunkTiming:
+    arrival_offset_ms: float
+    duration_ms: float
+    scheduled_start_offset_ms: float | None
+    gap_before_ms: float
+
+
+@dataclass(frozen=True)
+class VoicePlaybackEvent:
+    schema_version: str = field(init=False, default="1.0")
+    turn_id: str
+    chunk_count: int
+    audio_duration_ms: float
+    initial_buffered_ms: float
+    first_playback_delay_ms: float | None
+    buffer_target_ms: float
+    crossfade_ms: float
+    underrun_count: int
+    underrun_total_ms: float
+    underrun_max_ms: float
+    interrupted: bool
+    chunk_timings: tuple[VoicePlaybackChunkTiming, ...]
+
+
+def _required_metric(
+    chunk: Mapping[str, float | None],
+    key: str,
+) -> float:
+    value = chunk[key]
+    if value is None:
+        raise ValueError(f"{key} must not be null")
+    return round(value, 3)
+
+
+def _optional_metric(
+    chunk: Mapping[str, float | None],
+    key: str,
+) -> float | None:
+    value = chunk[key]
+    return round(value, 3) if value is not None else None
 
 
 class SafeAuditLogger:
@@ -215,3 +259,50 @@ class SafeAuditLogger:
             error_type=error_type,
         )
         self._logger.info("voice_synthesis %s", json.dumps(asdict(event), ensure_ascii=False))
+
+    def voice_playback(
+        self,
+        *,
+        turn_id: str,
+        chunk_count: int,
+        audio_duration_ms: float,
+        initial_buffered_ms: float,
+        first_playback_delay_ms: float | None,
+        buffer_target_ms: float,
+        crossfade_ms: float,
+        underrun_count: int,
+        underrun_total_ms: float,
+        underrun_max_ms: float,
+        interrupted: bool,
+        chunk_timings: Sequence[Mapping[str, float | None]],
+    ) -> None:
+        event = VoicePlaybackEvent(
+            turn_id=turn_id,
+            chunk_count=chunk_count,
+            audio_duration_ms=round(audio_duration_ms, 3),
+            initial_buffered_ms=round(initial_buffered_ms, 3),
+            first_playback_delay_ms=(
+                round(first_playback_delay_ms, 3)
+                if first_playback_delay_ms is not None
+                else None
+            ),
+            buffer_target_ms=round(buffer_target_ms, 3),
+            crossfade_ms=round(crossfade_ms, 3),
+            underrun_count=underrun_count,
+            underrun_total_ms=round(underrun_total_ms, 3),
+            underrun_max_ms=round(underrun_max_ms, 3),
+            interrupted=interrupted,
+            chunk_timings=tuple(
+                VoicePlaybackChunkTiming(
+                    arrival_offset_ms=_required_metric(chunk, "arrival_offset_ms"),
+                    duration_ms=_required_metric(chunk, "duration_ms"),
+                    scheduled_start_offset_ms=_optional_metric(
+                        chunk,
+                        "scheduled_start_offset_ms",
+                    ),
+                    gap_before_ms=_required_metric(chunk, "gap_before_ms"),
+                )
+                for chunk in chunk_timings
+            ),
+        )
+        self._logger.info("voice_playback %s", json.dumps(asdict(event), ensure_ascii=False))

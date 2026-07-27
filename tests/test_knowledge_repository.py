@@ -97,3 +97,45 @@ def test_app_item_requires_version_scope_before_approval() -> None:
 
     with pytest.raises(ValidationError):
         KnowledgeItem.model_validate(approved_data)
+
+
+@pytest.mark.parametrize(
+    "asr_terms,expected_error",
+    [
+        (
+            [
+                {
+                    "term_id": "asr-1",
+                    "canonical_term": "假除權息",
+                    "aliases": ["甲竹全席", "甲 竹全席"],
+                }
+            ],
+            "ASR 別名不得重複",
+        ),
+        (
+            [
+                {
+                    "term_id": "asr-1",
+                    "canonical_term": "假除權息",
+                    "aliases": ["複委託"],
+                },
+                {
+                    "term_id": "asr-2",
+                    "canonical_term": "複委託",
+                    "aliases": [],
+                },
+            ],
+            "語音辨識詞彙衝突",
+        ),
+    ],
+)
+def test_asr_terms_reject_ambiguous_aliases(
+    asr_terms: list[dict[str, object]],
+    expected_error: str,
+) -> None:
+    draft = LocalKnowledgeRepository.load(KNOWLEDGE_ROOT).items[0]
+
+    with pytest.raises(ValidationError, match=expected_error):
+        KnowledgeItem.model_validate(
+            draft.model_dump(mode="json") | {"asr_terms": asr_terms}
+        )

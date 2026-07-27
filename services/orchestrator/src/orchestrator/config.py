@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     tts_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000/v1")
     audio_public_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000/v1")
     asr_model: str | None = None
+    asr_candidate_model: str | None = None
     tts_model: str | None = None
     tts_voice: str = "Vivian"
     tts_ref_audio: str | None = None

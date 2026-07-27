@@ -97,6 +97,66 @@
         {% endif %}
       </section>
       <section class="panel">
+        <p class="panel-label">ASR VOCABULARY</p>
+        <div class="panel-title-row">
+          <h2>語音辨識詞彙／ASR 別名</h2>
+          <span class="variant-count">{{ item.asr_terms|length }} 組</span>
+        </div>
+        <p class="section-help">正確詞彙會提供給語音辨識模型；別名用來記錄實際觀察到的誤辨結果。只有有效的已發布版本會影響語音 Runtime。</p>
+        {% if item.status.value == 'draft' and dev_identity_enabled %}
+          <form class="variant-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/asr-terms">
+            <input type="hidden" name="expected_version" value="{{ row_version }}">
+            <div class="variant-editor-list">
+              {% for term in item.asr_terms %}
+                <div class="asr-editor-row">
+                  <input type="hidden" name="term_id" value="{{ term.term_id }}">
+                  <label>語音辨識詞彙
+                    <input name="canonical_term" required maxlength="100" value="{{ term.canonical_term }}">
+                  </label>
+                  <label>ASR 別名／誤辨詞（每行一筆）
+                    <textarea name="aliases_text" maxlength="2000" placeholder="例如：甲竹全席&#10;甲雛全息">{{ term.aliases|join('\n') }}</textarea>
+                  </label>
+                  <label class="variant-delete">
+                    <input type="checkbox" name="delete_term_id" value="{{ term.term_id }}">
+                    刪除
+                  </label>
+                </div>
+              {% else %}
+                <p class="variant-empty">目前沒有受治理的語音辨識詞彙，可由下方新增。</p>
+              {% endfor %}
+            </div>
+            <div class="asr-add">
+              <label>新增語音辨識詞彙
+                <input name="new_canonical_term" maxlength="100" placeholder="例如：假除權息">
+              </label>
+              <label>新增 ASR 別名／誤辨詞（每行一筆）
+                <textarea name="new_aliases_text" maxlength="2000" placeholder="例如：甲竹全席&#10;甲雛全息"></textarea>
+              </label>
+            </div>
+            <label>作者身分
+              <select name="actor_id">{% for actor in actors_by_role.author %}<option>{{ actor.actor_id }}</option>{% endfor %}</select>
+            </label>
+            <small class="field-help">每筆別名只能由一項已發布知識使用；別名衝突會在發布時被阻止。請勿填入客戶姓名、帳號或原始語音內容。</small>
+            <button type="submit">儲存語音辨識詞彙</button>
+          </form>
+        {% else %}
+          <ol class="asr-term-list">
+            {% for term in item.asr_terms %}
+              <li>
+                <strong>{{ term.canonical_term }}</strong>
+                {% if term.aliases %}
+                  <span>{{ term.aliases|join('、') }}</span>
+                {% else %}
+                  <span>尚無觀察到的誤辨詞</span>
+                {% endif %}
+              </li>
+            {% else %}
+              <li class="variant-empty">此知識版本尚未建立語音辨識詞彙。</li>
+            {% endfor %}
+          </ol>
+        {% endif %}
+      </section>
+      <section class="panel">
         <p class="panel-label">GUARDRAILS</p>
         <h2>禁止延伸範圍</h2>
         <ul class="guardrails">{% for restriction in item.prohibited_extensions %}<li>{{ restriction }}</li>{% endfor %}</ul>
@@ -134,7 +194,7 @@
             {% for version in versions %}
               <li>
                 <span class="timeline-dot"></span>
-                <div><strong>版本 {{ version.item.version }}</strong><p>{{ version.archived_by }} · {{ format_event_time(version.archived_at) }}</p><small>複審到期時間：{% if version.item.review_at %}{{ format_event_time(version.item.review_at) }}{% else %}尚未設定{% endif %} · 問句變體 {{ version.item.question_variants|length }} 筆</small></div>
+                <div><strong>版本 {{ version.item.version }}</strong><p>{{ version.archived_by }} · {{ format_event_time(version.archived_at) }}</p><small>複審到期時間：{% if version.item.review_at %}{{ format_event_time(version.item.review_at) }}{% else %}尚未設定{% endif %} · 問句變體 {{ version.item.question_variants|length }} 筆 · ASR 詞彙 {{ version.item.asr_terms|length }} 組</small></div>
                 <span class="status status-published">不可變快照</span>
               </li>
             {% endfor %}
@@ -186,6 +246,13 @@
             </form>
           {% elif item.status.value == 'published' %}
             <p class="dev-warning">此版本尚未到複審到期時間，不提供提前轉為草稿，以免線上答案意外下架。</p>
+          {% elif item.status.value == 'revoked' %}
+            <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/start_revoked_revision">
+              <input type="hidden" name="expected_version" value="{{ row_version }}">
+              <label>作者身分<select name="actor_id">{% for actor in actors_by_role.author %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+              <label>修訂說明<textarea name="reason" maxlength="1000" required placeholder="例如：新增語音辨識詞彙與 ASR 別名"></textarea><small class="field-help">撤銷事件與目前版本會保留在治理歷程及封存快照；新草稿必須重新完成審核與發布。</small></label>
+              <button type="submit">建立修訂草稿</button>
+            </form>
           {% endif %}
 
           {% if item.status.value in ['review', 'approved'] %}
@@ -204,7 +271,7 @@
               <form class="action-form" method="post" action="/admin/knowledge/{{ item.knowledge_id }}/actions/revoke">
                 <input type="hidden" name="expected_version" value="{{ row_version }}">
                 <label>撤銷身分<select name="actor_id">{% for actor in actors_by_role.revoker %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
-                <label>撤銷原因<textarea name="reason" maxlength="1000" required></textarea><small class="field-help">不得填寫客戶個資、帳號或密碼。</small></label>
+                <label>撤銷原因<textarea name="reason" maxlength="1000" required></textarea><small class="field-help">撤銷會立即停止 Runtime 使用且不能直接還原；後續只能建立修訂草稿並重新審核發布。不得填寫客戶個資、帳號或密碼。</small></label>
                 <button class="button-danger" type="submit">確認撤銷</button>
               </form>
             </details>

@@ -42,6 +42,7 @@ packages = [
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers --strict-config"
+pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.coverage.run]

@@ -100,6 +100,8 @@ code { color: #6f7d78; font-size: 12px; }
 .variant-delete { display: flex; align-items: center; gap: 7px; height: 42px; color: #954242; }
 .variant-delete input { width: 16px; height: 16px; margin: 0; }
 .variant-add { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 10px; align-items: end; padding-top: 14px; border-top: 1px solid var(--line); }
+.asr-editor-row { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr) 64px; gap: 10px; align-items: end; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fafcfb; }
+.asr-add { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr); gap: 10px; align-items: end; padding-top: 14px; border-top: 1px solid var(--line); }
 .variant-form textarea { width: 100%; min-height: 92px; margin-top: 7px; padding: 10px 11px; border: 1px solid #cbd7d2; border-radius: 8px; resize: vertical; font: inherit; }
 .variant-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
 .variant-list li { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; }
@@ -108,6 +110,9 @@ code { color: #6f7d78; font-size: 12px; }
 .variant-usage-evaluation_only { background: #e7efff; color: #315caa; }
 .variant-usage-excluded { background: #f4e8e8; color: #954242; }
 .variant-empty { color: var(--muted); font-size: 13px; }
+.asr-term-list { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.asr-term-list li { display: grid; grid-template-columns: minmax(140px, .5fr) minmax(0, 1.5fr); gap: 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px; }
+.asr-term-list span { color: var(--muted); font-size: 13px; }
 .answer-panel { border-top: 3px solid var(--green); }
 .generated-panel { border-top: 3px solid #3867b4; }
 .answer { margin: 0; font-size: 19px; line-height: 1.8; }
@@ -196,7 +201,7 @@ details summary { color: var(--green); cursor: pointer; font-size: 12px; font-we
   .filters { grid-template-columns: 1fr 1fr; }
   .filters label:first-child { grid-column: 1 / -1; }
   .detail-grid, .shadow-comparison { grid-template-columns: 1fr; }
-  .variant-editor-row, .variant-add, .import-form { grid-template-columns: 1fr; }
+  .variant-editor-row, .variant-add, .asr-editor-row, .asr-add, .import-form { grid-template-columns: 1fr; }
   .wide-field { grid-column: auto; }
   .import-confirm { align-items: stretch; flex-direction: column; }
 }

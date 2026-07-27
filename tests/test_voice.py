@@ -4,8 +4,10 @@ import json
 import wave
 from array import array
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from observability import SafeAuditLogger
@@ -61,16 +63,26 @@ class CapturingVoiceAuditLogger(SafeAuditLogger):
         )
 
 
+class CapturingPlaybackAuditLogger(SafeAuditLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[dict[str, object]] = []
+
+    def voice_playback(self, **metrics: object) -> None:
+        self.events.append(metrics)
+
+
 def voice_service(
     transport: httpx.AsyncBaseTransport,
     *,
     audit_logger: SafeAuditLogger | None = None,
     voice_clone: bool = False,
+    asr_model: str = "synthetic-asr",
 ) -> VoiceService:
     return VoiceService(
         audio_base_url="http://audio.test/v1",
         audio_public_base_url="http://127.0.0.1:8000/v1",
-        asr_model="synthetic-asr",
+        asr_model=asr_model,
         tts_model="synthetic-tts",
         tts_voice="Vivian",
         tts_ref_audio="/private/reference.wav" if voice_clone else None,
@@ -93,9 +105,56 @@ def test_voice_helpers_preserve_realtime_url_and_complete_wav_frames() -> None:
     )
     assert frames == [frame, frame]
     assert remainder == b""
-    assert "".join(split_tts_text("第一句回答。第二句補充。", max_chars=7)) == (
-        "第一句回答。第二句補充。"
-    )
+    assert split_tts_text("第一句回答。第二句補充。", max_chars=7, hard_max_chars=9) == [
+        "第一句回答。",
+        "第二句補充。",
+    ]
+
+
+def test_tts_segmenter_uses_only_selected_punctuation_near_target_length() -> None:
+    text = ("甲" * 45) + "！" + ("乙" * 24) + "，" + ("丙" * 55) + "？"
+
+    segments = split_tts_text(text)
+
+    assert segments == [
+        ("甲" * 45) + "！" + ("乙" * 24) + "，",
+        ("丙" * 55) + "？",
+    ]
+
+
+def test_tts_segmenter_can_extend_to_96_characters_for_selected_boundary() -> None:
+    text = ("甲" * 84) + "。" + ("乙" * 30)
+
+    segments = split_tts_text(text)
+
+    assert segments == [("甲" * 84) + "。", "乙" * 30]
+
+
+def test_tts_segmenter_uses_enumeration_comma_and_newline_boundaries() -> None:
+    text = ("甲" * 79) + "、" + ("乙" * 79) + "\n" + ("丙" * 30)
+
+    segments = split_tts_text(text)
+
+    assert segments == [
+        ("甲" * 79) + "、",
+        "乙" * 79,
+        "丙" * 30,
+    ]
+
+
+def test_tts_segmenter_hard_splits_only_when_selected_boundary_is_unavailable() -> None:
+    text = ("甲" * 50) + "；" + ("乙" * 60)
+
+    segments = split_tts_text(text)
+
+    assert segments == [text[:96], text[96:]]
+
+
+def test_tts_segmenter_rejects_invalid_limits() -> None:
+    with pytest.raises(ValueError, match="max_chars"):
+        split_tts_text("測試", max_chars=0)
+    with pytest.raises(ValueError, match="hard_max_chars"):
+        split_tts_text("測試", max_chars=80, hard_max_chars=79)
 
 
 def test_voice_service_streams_audio_and_logs_no_answer_text() -> None:
@@ -148,14 +207,19 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
             return httpx.Response(200, json={"message": "ok"})
         return httpx.Response(200, content=frame)
 
-    voice = voice_service(httpx.MockTransport(handler), voice_clone=True)
+    voice = voice_service(
+        httpx.MockTransport(handler),
+        voice_clone=True,
+        asr_model="mlx-community/Qwen3-ASR-1.7B-8bit",
+    )
     settings = Settings(
         database_url="sqlite+pysqlite:///:memory:",
         retrieval_mode="lexical",
         answer_mode="exact",
         intent_router_mode="disabled",
         voice_enabled=True,
-        asr_model="synthetic-asr",
+        asr_model="mlx-community/Qwen3-ASR-1.7B-8bit",
+        asr_candidate_model="mlx-community/whisper-large-v3-turbo-asr-fp16",
         tts_model="synthetic-tts",
     )
 
@@ -171,7 +235,11 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     events = [json.loads(line) for line in response.text.splitlines()]
     turn = events[0]["turn"]
     assert config.json()["available"] is True
-    assert config.json()["models"]["asr"] == "synthetic-asr"
+    assert config.json()["models"]["asr"] == "mlx-community/Qwen3-ASR-1.7B-8bit"
+    assert config.json()["asr_models"] == [
+        "mlx-community/Qwen3-ASR-1.7B-8bit",
+        "mlx-community/whisper-large-v3-turbo-asr-fp16",
+    ]
     assert config.json()["models"]["voice_clone"] is True
     assert config.json()["asr_context"] == ""
     assert "reference.wav" not in config.text
@@ -237,3 +305,63 @@ def test_voice_endpoint_applies_phonetic_recovery_before_tts() -> None:
     assert result["policy_rule_id"] == "ASR-PHONETIC-001"
     assert result["answer_id"] == "K-FAQ-ASR-001"
     assert events[1]["type"] == "audio"
+
+
+def test_voice_playback_metrics_endpoint_logs_metadata_and_rejects_content() -> None:
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+    )
+    turn_id = uuid4()
+    payload = {
+        "chunk_count": 2,
+        "audio_duration_ms": 1000,
+        "initial_buffered_ms": 1000,
+        "first_playback_delay_ms": 1220,
+        "buffer_target_ms": 1200,
+        "crossfade_ms": 8,
+        "underrun_count": 0,
+        "underrun_total_ms": 0,
+        "underrun_max_ms": 0,
+        "interrupted": False,
+        "chunk_timings": [
+            {
+                "arrival_offset_ms": 300,
+                "duration_ms": 500,
+                "scheduled_start_offset_ms": 1240,
+                "gap_before_ms": 0,
+            },
+            {
+                "arrival_offset_ms": 850,
+                "duration_ms": 500,
+                "scheduled_start_offset_ms": 1732,
+                "gap_before_ms": 0,
+            },
+        ],
+    }
+    audit = CapturingPlaybackAuditLogger()
+
+    with TestClient(
+        create_app(
+            service=TurnService(audit_logger=audit),
+            settings=settings,
+        )
+    ) as client:
+        response = client.post(
+            f"/v1/voice/{turn_id}/playback-metrics",
+            json=payload,
+        )
+        invalid = client.post(
+            f"/v1/voice/{turn_id}/playback-metrics",
+            json=payload | {"transcript": "不可記錄的問題內容"},
+        )
+
+    assert response.status_code == 204
+    assert invalid.status_code == 422
+    assert len(audit.events) == 1
+    event = audit.events[0]
+    assert event["turn_id"] == str(turn_id)
+    assert event["chunk_count"] == 2
+    assert "transcript" not in event

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from orchestrator.asr import MandarinPhoneticResolver, build_asr_context
-from retrieval import KnowledgeDocument, QuestionVariant, QuestionVariantUsage
+from retrieval import ASRTerm, KnowledgeDocument, QuestionVariant, QuestionVariantUsage
 from test_api import published_document
 
 
@@ -9,6 +9,7 @@ def phonetic_document(
     knowledge_id: str = "K-FAQ-ASR-001",
     *,
     title: str = "假除權息說明",
+    asr_terms: list[ASRTerm] | None = None,
 ) -> KnowledgeDocument:
     base = published_document()
     return KnowledgeDocument(
@@ -19,6 +20,7 @@ def phonetic_document(
                 "standard_answer": "這是假除權息的核准說明。",
                 "products": ["信用交易"],
                 "allowed_intents": ["faq_general_guidance"],
+                "asr_terms": asr_terms or [],
                 "question_variants": [
                     QuestionVariant(
                         variant_id=f"{knowledge_id}-variant",
@@ -49,6 +51,32 @@ def test_asr_context_stops_at_the_configured_character_limit() -> None:
 
     assert context == "假除權息、信用交易"
     assert len(context) <= 12
+
+
+def test_governed_asr_terms_take_priority_and_aliases_are_not_prompted() -> None:
+    document = phonetic_document(
+        asr_terms=[
+            ASRTerm(
+                term_id="asr-fake-ex-rights",
+                canonical_term="假除權息",
+                aliases=["甲竹全席", "甲雛全息"],
+            )
+        ]
+    )
+
+    context = build_asr_context((document,))
+    resolution = MandarinPhoneticResolver(minimum_score=1.0).resolve(
+        query="什麼是甲竹全席",
+        intent="general_securities_knowledge",
+        documents=(document,),
+    )
+
+    assert context == "假除權息、信用交易"
+    assert "甲竹全席" not in context
+    assert resolution.match is not None
+    assert resolution.match.document.item.knowledge_id == document.item.knowledge_id
+    assert resolution.match.score == 1.0
+    assert resolution.strategy == "alias"
 
 
 def test_phonetic_resolver_recovers_common_asr_homophones() -> None:

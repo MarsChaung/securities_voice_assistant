@@ -15,7 +15,9 @@ class KnowledgeRole(StrEnum):
 class GovernanceAction(StrEnum):
     UPDATE_CONTENT = "update_content"
     UPDATE_QUESTION_VARIANTS = "update_question_variants"
+    UPDATE_ASR_TERMS = "update_asr_terms"
     START_REVISION = "start_revision"
+    START_REVOKED_REVISION = "start_revoked_revision"
     SUBMIT_REVIEW = "submit_review"
     COMPLETE_REVIEW = "complete_review"
     APPROVE = "approve"
@@ -41,7 +43,12 @@ class GovernancePolicy:
             KnowledgeStatus.DRAFT,
             GovernanceAction.UPDATE_QUESTION_VARIANTS,
         ): KnowledgeStatus.DRAFT,
+        (KnowledgeStatus.DRAFT, GovernanceAction.UPDATE_ASR_TERMS): KnowledgeStatus.DRAFT,
         (KnowledgeStatus.PUBLISHED, GovernanceAction.START_REVISION): KnowledgeStatus.DRAFT,
+        (
+            KnowledgeStatus.REVOKED,
+            GovernanceAction.START_REVOKED_REVISION,
+        ): KnowledgeStatus.DRAFT,
         (KnowledgeStatus.DRAFT, GovernanceAction.SUBMIT_REVIEW): KnowledgeStatus.REVIEW,
         (KnowledgeStatus.REVIEW, GovernanceAction.COMPLETE_REVIEW): KnowledgeStatus.REVIEW,
         (KnowledgeStatus.REVIEW, GovernanceAction.APPROVE): KnowledgeStatus.APPROVED,
@@ -55,7 +62,9 @@ class GovernancePolicy:
     _ACTION_ROLES = {
         GovernanceAction.UPDATE_CONTENT: frozenset({KnowledgeRole.AUTHOR}),
         GovernanceAction.UPDATE_QUESTION_VARIANTS: frozenset({KnowledgeRole.AUTHOR}),
+        GovernanceAction.UPDATE_ASR_TERMS: frozenset({KnowledgeRole.AUTHOR}),
         GovernanceAction.START_REVISION: frozenset({KnowledgeRole.AUTHOR}),
+        GovernanceAction.START_REVOKED_REVISION: frozenset({KnowledgeRole.AUTHOR}),
         GovernanceAction.SUBMIT_REVIEW: frozenset({KnowledgeRole.AUTHOR}),
         GovernanceAction.COMPLETE_REVIEW: frozenset({KnowledgeRole.REVIEWER}),
         GovernanceAction.APPROVE: frozenset({KnowledgeRole.APPROVER}),
@@ -94,11 +103,15 @@ class GovernancePolicy:
         if action in {
             GovernanceAction.UPDATE_CONTENT,
             GovernanceAction.UPDATE_QUESTION_VARIANTS,
+            GovernanceAction.UPDATE_ASR_TERMS,
         } and actor.actor_id != item.author:
             raise GovernanceError("只有原作者可以編輯知識草稿")
 
-        if action is GovernanceAction.START_REVISION and actor.actor_id != item.author:
-            raise GovernanceError("只有原作者可以建立複審新版")
+        if action in {
+            GovernanceAction.START_REVISION,
+            GovernanceAction.START_REVOKED_REVISION,
+        } and actor.actor_id != item.author:
+            raise GovernanceError("只有原作者可以建立修訂新版")
 
         if action is GovernanceAction.COMPLETE_REVIEW:
             if actor.actor_id == item.author:

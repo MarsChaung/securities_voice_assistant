@@ -5,6 +5,7 @@ from .embeddings import (
 )
 from .hybrid import HybridKnowledgeRetriever
 from .models import (
+    ASRTerm,
     KnowledgeDocument,
     KnowledgeItem,
     KnowledgeSource,
@@ -21,6 +22,7 @@ from .sql_repository import KnowledgeRepositoryError, SqlKnowledgeRepository
 __all__ = [
     "EmbeddingProvider",
     "EmbeddingServiceError",
+    "ASRTerm",
     "HybridKnowledgeRetriever",
     "KnowledgeItem",
     "KnowledgeDocument",

@@ -5,9 +5,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy import Engine, create_engine, func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from retrieval import (
+    ASRTerm,
     KnowledgeItem,
     KnowledgeSource,
     KnowledgeStatus,
@@ -48,6 +49,13 @@ class QuestionVariantInput:
     variant_id: str | None
     question_text: str
     usage: QuestionVariantUsage
+
+
+@dataclass(frozen=True)
+class ASRTermInput:
+    term_id: str | None
+    canonical_term: str
+    aliases: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -154,6 +162,7 @@ class DatabaseKnowledgeRepository:
         if action in {
             GovernanceAction.UPDATE_CONTENT,
             GovernanceAction.UPDATE_QUESTION_VARIANTS,
+            GovernanceAction.UPDATE_ASR_TERMS,
         }:
             raise ValueError("草稿內容必須使用專用編輯操作")
         resolved_payload = payload or GovernancePayload()
@@ -176,7 +185,10 @@ class DatabaseKnowledgeRepository:
             next_status = GovernancePolicy.next_status(current_item, action, actor)
             previous_status = current_item.status
 
-            if action is GovernanceAction.START_REVISION:
+            if action in {
+                GovernanceAction.START_REVISION,
+                GovernanceAction.START_REVOKED_REVISION,
+            }:
                 session.add(
                     KnowledgeItemVersionRecord(
                         version_id=str(uuid4()),
@@ -187,6 +199,9 @@ class DatabaseKnowledgeRepository:
                         archived_by=actor.actor_id,
                     )
                 )
+
+            if action is GovernanceAction.PUBLISH:
+                _validate_asr_publish_conflicts(session, record)
 
             self._apply_action(record, action, actor, resolved_payload, occurred_at)
             record.status = next_status.value
@@ -398,6 +413,80 @@ class DatabaseKnowledgeRepository:
                 row_version=record.row_version,
             )
 
+    def update_asr_terms(
+        self,
+        *,
+        knowledge_id: str,
+        terms: tuple[ASRTermInput, ...],
+        actor: GovernanceActor,
+        expected_version: int,
+        now: datetime | None = None,
+    ) -> KnowledgeRecord:
+        occurred_at = now or datetime.now(UTC)
+        if occurred_at.tzinfo is None:
+            raise ValueError("治理事件時間必須包含時區")
+
+        with self._sessions.begin() as session:
+            record = session.scalar(
+                select(KnowledgeItemRecord)
+                .where(KnowledgeItemRecord.knowledge_id == knowledge_id)
+                .with_for_update()
+            )
+            if record is None:
+                raise KnowledgeNotFoundError(knowledge_id)
+            if record.row_version != expected_version:
+                raise ConcurrentUpdateError("資料已被其他操作更新，請重新載入")
+
+            current_item = _item_to_domain(record)
+            GovernancePolicy.next_status(
+                current_item,
+                GovernanceAction.UPDATE_ASR_TERMS,
+                actor,
+            )
+            validated_terms = _validate_asr_term_inputs(
+                terms,
+                existing=current_item.asr_terms,
+            )
+            validated_item = KnowledgeItem.model_validate(
+                current_item.model_dump(mode="json")
+                | {"asr_terms": [term.model_dump(mode="json") for term in validated_terms]}
+            )
+            validated_terms = tuple(validated_item.asr_terms)
+            serialized = [term.model_dump(mode="json") for term in validated_terms]
+            if record.asr_terms == serialized:
+                raise ValueError("語音辨識詞彙沒有變更")
+
+            previous_by_id = {term.term_id: term for term in current_item.asr_terms}
+            next_by_id = {term.term_id: term for term in validated_terms}
+            added = len(next_by_id.keys() - previous_by_id.keys())
+            deleted = len(previous_by_id.keys() - next_by_id.keys())
+            updated = sum(
+                previous_by_id[term_id] != next_by_id[term_id]
+                for term_id in previous_by_id.keys() & next_by_id.keys()
+            )
+
+            record.asr_terms = serialized
+            record.row_version += 1
+            record.updated_at = occurred_at
+            session.add(
+                GovernanceEventRecord(
+                    event_id=str(uuid4()),
+                    knowledge_id=knowledge_id,
+                    action=GovernanceAction.UPDATE_ASR_TERMS.value,
+                    from_status=KnowledgeStatus.DRAFT.value,
+                    to_status=KnowledgeStatus.DRAFT.value,
+                    actor_id=actor.actor_id,
+                    reason=f"ASR 詞彙：新增 {added}、修改 {updated}、刪除 {deleted}",
+                    row_version=record.row_version,
+                    occurred_at=occurred_at,
+                )
+            )
+            session.flush()
+            return KnowledgeRecord(
+                item=_item_to_domain(record),
+                row_version=record.row_version,
+            )
+
     @staticmethod
     def _apply_action(
         record: KnowledgeItemRecord,
@@ -406,14 +495,18 @@ class DatabaseKnowledgeRepository:
         payload: GovernancePayload,
         occurred_at: datetime,
     ) -> None:
-        if action is GovernanceAction.START_REVISION:
+        if action in {
+            GovernanceAction.START_REVISION,
+            GovernanceAction.START_REVOKED_REVISION,
+        }:
             if not payload.reason or not payload.reason.strip():
-                raise ValueError("建立複審新版時必須填寫版本說明")
-            if record.review_at is None:
-                raise ValueError("只有具備複審到期時間的發布知識可以建立新版")
-            review_deadline = _as_utc(record.review_at)
-            if review_deadline > occurred_at.astimezone(UTC):
-                raise ValueError("複審尚未到期，不得提前將線上版本轉為草稿")
+                raise ValueError("建立修訂新版時必須填寫版本說明")
+            if action is GovernanceAction.START_REVISION:
+                if record.review_at is None:
+                    raise ValueError("只有具備複審到期時間的發布知識可以建立新版")
+                review_deadline = _as_utc(record.review_at)
+                if review_deadline > occurred_at.astimezone(UTC):
+                    raise ValueError("複審尚未到期，不得提前將線上版本轉為草稿")
             record.previous_version = record.version
             record.version = _next_draft_version(record.version)
             record.change_summary = payload.reason.strip()
@@ -540,6 +633,7 @@ def _item_to_domain(record: KnowledgeItemRecord) -> KnowledgeItem:
                 }
                 for variant in record.question_variants
             ],
+            "asr_terms": record.asr_terms,
         }
     )
 
@@ -630,6 +724,7 @@ def _item_from_domain(item: KnowledgeItem, *, now: datetime) -> KnowledgeItemRec
         public_answer_allowed=item.public_answer_allowed,
         allowed_intents=item.allowed_intents,
         prohibited_extensions=item.prohibited_extensions,
+        asr_terms=[term.model_dump(mode="json") for term in item.asr_terms],
         row_version=1,
         created_at=now,
         updated_at=now,
@@ -690,3 +785,90 @@ def _validate_variant_inputs(
 
 def _normalize_question(value: str) -> str:
     return re.sub(r"[^0-9a-z\u3400-\u9fff]", "", value.casefold())
+
+
+def _validate_asr_term_inputs(
+    terms: tuple[ASRTermInput, ...],
+    *,
+    existing: list[ASRTerm],
+) -> tuple[ASRTerm, ...]:
+    existing_ids = {term.term_id for term in existing}
+    provided_ids = [term.term_id for term in terms if term.term_id]
+    if len(provided_ids) != len(set(provided_ids)):
+        raise ValueError("同一語音辨識詞彙不得重複提交")
+    if set(provided_ids) - existing_ids:
+        raise ValueError("提交了不屬於此知識項目的語音辨識詞彙")
+
+    resolved = tuple(
+        ASRTerm(
+            term_id=term.term_id or str(uuid4()),
+            canonical_term=term.canonical_term,
+            aliases=list(term.aliases),
+        )
+        for term in terms
+    )
+    return resolved
+
+
+def _validate_asr_publish_conflicts(
+    session: Session,
+    record: KnowledgeItemRecord,
+) -> None:
+    candidate = _item_to_domain(record)
+    if not candidate.asr_terms:
+        return
+
+    candidate_canonical = {
+        _normalize_question(term.canonical_term): term.canonical_term
+        for term in candidate.asr_terms
+    }
+    candidate_aliases = {
+        _normalize_question(alias): alias
+        for term in candidate.asr_terms
+        for alias in term.aliases
+    }
+    published_records = session.scalars(
+        select(KnowledgeItemRecord).where(
+            KnowledgeItemRecord.knowledge_id != record.knowledge_id,
+            KnowledgeItemRecord.status == KnowledgeStatus.PUBLISHED.value,
+        )
+    )
+    for published_record in published_records:
+        published = _item_to_domain(published_record)
+        if not _runtime_windows_overlap(candidate, published):
+            continue
+        published_canonical = {
+            _normalize_question(term.canonical_term) for term in published.asr_terms
+        }
+        published_aliases = {
+            _normalize_question(alias)
+            for term in published.asr_terms
+            for alias in term.aliases
+        }
+        conflicts = (
+            candidate_aliases.keys() & (published_aliases | published_canonical)
+        ) | (candidate_canonical.keys() & published_aliases)
+        if conflicts:
+            conflict = sorted(conflicts)[0]
+            display = candidate_aliases.get(conflict) or candidate_canonical[conflict]
+            raise ValueError(
+                f"ASR 詞彙／別名「{display}」與 {published.knowledge_id} 衝突"
+            )
+
+
+def _runtime_windows_overlap(first: KnowledgeItem, second: KnowledgeItem) -> bool:
+    if first.effective_at is None or second.effective_at is None:
+        return False
+    first_ends = [
+        deadline
+        for deadline in (first.expires_at, first.review_at)
+        if deadline is not None
+    ]
+    second_ends = [
+        deadline
+        for deadline in (second.expires_at, second.review_at)
+        if deadline is not None
+    ]
+    if not first_ends or not second_ends:
+        return False
+    return first.effective_at <= min(second_ends) and second.effective_at <= min(first_ends)

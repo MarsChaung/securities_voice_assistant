@@ -34,7 +34,13 @@ from .config import Settings, get_settings
 from .intent_routing import OpenAICompatibleIntentRouter
 from .service import TurnService
 from .shadow import ThreadedShadowAnswerRunner
-from .voice import VoiceReplyRequest, VoiceService, ndjson_event, realtime_asr_url
+from .voice import (
+    VoicePlaybackMetrics,
+    VoiceReplyRequest,
+    VoiceService,
+    ndjson_event,
+    realtime_asr_url,
+)
 
 _PACKAGE_ROOT = Path(__file__).parent
 
@@ -233,6 +239,16 @@ def create_app(
     async def voice_config() -> Response:
         if resolved_voice_service is None:
             return JSONResponse({"enabled": False, "available": False})
+        asr_models = list(
+            dict.fromkeys(
+                model
+                for model in (
+                    resolved_voice_service.models.asr,
+                    resolved_settings.asr_candidate_model,
+                )
+                if model
+            )
+        )
         return JSONResponse(
             {
                 "enabled": True,
@@ -246,6 +262,7 @@ def create_app(
                     "voice": resolved_voice_service.models.voice,
                     "voice_clone": resolved_voice_service.voice_clone_enabled,
                 },
+                "asr_models": asr_models,
                 "asr_context": resolved_service.voice_asr_context(),
             }
         )
@@ -274,6 +291,14 @@ def create_app(
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.post("/v1/voice/{turn_id}/playback-metrics", status_code=204)
+    def record_voice_playback(turn_id: UUID, metrics: VoicePlaybackMetrics) -> Response:
+        resolved_service.record_voice_playback(
+            turn_id=str(turn_id),
+            **metrics.model_dump(),
+        )
+        return Response(status_code=204)
 
     return app
 

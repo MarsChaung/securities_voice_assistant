@@ -20,18 +20,42 @@ def realtime_asr_url(audio_public_base_url: str) -> str:
     return urlunsplit((scheme, parsed.netloc, path, "", ""))
 
 
-def split_tts_text(text: str, *, max_chars: int = 42) -> list[str]:
+def split_tts_text(
+    text: str,
+    *,
+    max_chars: int = 80,
+    hard_max_chars: int = 96,
+) -> list[str]:
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+    if hard_max_chars < max_chars:
+        raise ValueError("hard_max_chars must be greater than or equal to max_chars")
+
     remaining = text.strip()
     chunks: list[str] = []
-    boundaries = "。！？；!?;\n，、,：:"
+    boundaries = "，。？、\n"
     while remaining:
-        if len(remaining) <= max_chars:
+        if len(remaining) <= hard_max_chars:
             chunks.append(remaining)
             break
-        window = remaining[:max_chars]
-        cut = max((window.rfind(mark) for mark in boundaries), default=-1) + 1
-        if cut <= 0:
-            cut = max_chars
+
+        window = remaining[:hard_max_chars]
+        candidates = [
+            index + 1
+            for index, character in enumerate(window)
+            if character in boundaries
+        ]
+        cut = (
+            min(
+                candidates,
+                key=lambda position: (
+                    abs(position - max_chars),
+                    position > max_chars,
+                ),
+            )
+            if candidates
+            else hard_max_chars
+        )
         chunks.append(remaining[:cut].strip())
         remaining = remaining[cut:].lstrip()
     return [chunk for chunk in chunks if chunk]
@@ -67,6 +91,31 @@ class VoiceReplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transcript: str = Field(min_length=1, max_length=4_000)
+
+
+class VoicePlaybackChunkMetric(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    arrival_offset_ms: float = Field(ge=0, le=600_000)
+    duration_ms: float = Field(gt=0, le=60_000)
+    scheduled_start_offset_ms: float | None = Field(default=None, ge=0, le=600_000)
+    gap_before_ms: float = Field(default=0, ge=0, le=60_000)
+
+
+class VoicePlaybackMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_count: int = Field(ge=1, le=300)
+    audio_duration_ms: float = Field(gt=0, le=600_000)
+    initial_buffered_ms: float = Field(ge=0, le=600_000)
+    first_playback_delay_ms: float | None = Field(default=None, ge=0, le=600_000)
+    buffer_target_ms: float = Field(ge=0, le=10_000)
+    crossfade_ms: float = Field(ge=0, le=100)
+    underrun_count: int = Field(ge=0, le=300)
+    underrun_total_ms: float = Field(ge=0, le=600_000)
+    underrun_max_ms: float = Field(ge=0, le=60_000)
+    interrupted: bool
+    chunk_timings: list[VoicePlaybackChunkMetric] = Field(max_length=300)
 
 
 class VoiceSynthesisError(RuntimeError):

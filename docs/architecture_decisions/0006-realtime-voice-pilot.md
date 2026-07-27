@@ -27,7 +27,7 @@
 
 PostgreSQL、orchestrator 與知識治理中心由本專案 Compose 管理；oMLX 與 MLX Audio 維持宿主機獨立推論服務。瀏覽器使用 `SVA_AUDIO_PUBLIC_BASE_URL` 取得可連線的 ASR WebSocket URL，容器後端使用 `SVA_TTS_BASE_URL` 呼叫 TTS。
 
-為提供台灣口音 Demo，Pilot 使用 Qwen3-TTS Base voice clone。授權參考音檔的宿主機絕對路徑與逐字稿只保存在被 Git 忽略的 `.env`，兩者必須同時設定；orchestrator 將它們送往宿主機 MLX Audio，並使用低溫度、`top_k=1`、`top_p=1.0` 與 repetition penalty 的穩定解碼設定。公開設定 API 只回報 voice clone 是否啟用，不揭露路徑或逐字稿；一般稽核也不記錄參考素材。
+為提供台灣口音 Demo，Pilot 使用 Qwen3-TTS Base 6-bit voice clone，仍由宿主機 MLX Audio API 負責推論。授權參考音檔的宿主機絕對路徑與逐字稿只保存在被 Git 忽略的 `.env`，兩者必須同時設定；orchestrator 將它們送往宿主機 MLX Audio，並使用低溫度、`top_k=1`、`top_p=1.0` 與 repetition penalty 的穩定解碼設定。回答只優先依 `，。？、` 與換行在 80 字附近分段，若 96 字內沒有合適切點才硬切，以減少請求與片段數。公開設定 API 只回報 voice clone 是否啟用，不揭露路徑或逐字稿；一般稽核也不記錄參考素材。
 
 ## 已知限制
 

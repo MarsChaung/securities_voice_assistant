@@ -8,6 +8,8 @@ const systemState = document.querySelector("#system-state");
 const systemStateText = document.querySelector("#system-state-text");
 const voiceButton = document.querySelector("#voice-button");
 const voiceStatus = document.querySelector("#voice-status");
+const asrModelControl = document.querySelector("#asr-model-control");
+const asrModelSelect = document.querySelector("#asr-model");
 const initialMessage = messages.firstElementChild.cloneNode(true);
 const voiceState = {
   config: null,
@@ -19,13 +21,42 @@ const voiceState = {
   socket: null,
   socketPromise: null,
   socketReady: false,
+  activeAsrModel: null,
   listening: false,
   continuous: false,
   replying: false,
   replyController: null,
   activeSources: new Set(),
+  playbackScheduler: null,
   partialTranscript: "",
 };
+
+function selectedAsrModel() {
+  return asrModelSelect.value || voiceState.config?.models?.asr || "";
+}
+
+function asrLanguage(model) {
+  return model.includes("Qwen3-ASR") ? "Chinese" : "zh";
+}
+
+function asrUsesTokenStreaming(model) {
+  return model.includes("Qwen3-ASR");
+}
+
+function asrModelLabel(model) {
+  return model.split("/").pop() || model;
+}
+
+function closeRealtimeAsr() {
+  const socket = voiceState.socket;
+  voiceState.socket = null;
+  voiceState.socketReady = false;
+  voiceState.activeAsrModel = null;
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ action: "stop" }));
+  }
+  socket?.close();
+}
 
 const decisionLabels = {
   answer: "核准知識回答",
@@ -259,12 +290,27 @@ function stopRealtimeCapture() {
 }
 
 function stopVoicePlayback() {
+  if (voiceState.playbackScheduler) {
+    voiceState.playbackScheduler.interrupt();
+    voiceState.playbackScheduler = null;
+    return;
+  }
   for (const source of voiceState.activeSources) {
     try {
       source.stop();
     } catch {}
   }
   voiceState.activeSources.clear();
+}
+
+function reportVoicePlayback(turnId, metrics) {
+  if (!turnId || !metrics.chunk_count) return;
+  void fetch(`/v1/voice/${encodeURIComponent(turnId)}/playback-metrics`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(metrics),
+    keepalive: true,
+  }).catch(() => {});
 }
 
 function startRealtimeCapture() {
@@ -330,9 +376,15 @@ function handleRealtimeAsrEvent(data) {
 }
 
 async function ensureRealtimeAsr() {
-  if (voiceState.socket?.readyState === WebSocket.OPEN && voiceState.socketReady) return;
+  const requestedModel = selectedAsrModel();
+  if (
+    voiceState.socket?.readyState === WebSocket.OPEN
+    && voiceState.socketReady
+    && voiceState.activeAsrModel === requestedModel
+  ) return;
+  if (voiceState.socket?.readyState === WebSocket.OPEN) closeRealtimeAsr();
   if (voiceState.socketPromise) return voiceState.socketPromise;
-  if (!voiceState.config?.realtime_asr_url || !voiceState.config?.models?.asr) {
+  if (!voiceState.config?.realtime_asr_url || !requestedModel) {
     throw new Error("缺少即時 ASR 設定。");
   }
 
@@ -349,10 +401,10 @@ async function ensureRealtimeAsr() {
       }
     }, 120000);
     socket.onopen = () => socket.send(JSON.stringify({
-      model: voiceState.config.models.asr,
-      language: "zh",
+      model: requestedModel,
+      language: asrLanguage(requestedModel),
       sample_rate: 16000,
-      streaming: false,
+      streaming: asrUsesTokenStreaming(requestedModel),
       semantic_endpointing: true,
       output_script: "traditional",
       context: voiceState.config.asr_context || undefined,
@@ -368,6 +420,7 @@ async function ensureRealtimeAsr() {
         settled = true;
         clearTimeout(timeout);
         voiceState.socketReady = true;
+        voiceState.activeAsrModel = requestedModel;
         voiceState.socketPromise = null;
         resolve();
         return;
@@ -383,6 +436,7 @@ async function ensureRealtimeAsr() {
     socket.onclose = () => {
       clearTimeout(timeout);
       voiceState.socketReady = false;
+      voiceState.activeAsrModel = null;
       voiceState.socketPromise = null;
       if (!settled) reject(new Error("即時 ASR 連線已關閉。"));
       else if (voiceState.continuous) stopVoiceSession("即時 ASR 連線已中斷。");
@@ -393,6 +447,7 @@ async function ensureRealtimeAsr() {
 
 async function startVoiceListening() {
   try {
+    asrModelSelect.disabled = true;
     await ensureMicrophone();
     setVoiceStatus("正在準備即時語音辨識…");
     await ensureRealtimeAsr();
@@ -421,24 +476,36 @@ function stopVoiceSession(status = "語音對話已停止；按麥克風可重�
   }
   voiceButton.classList.remove("listening", "speaking");
   voiceButton.setAttribute("aria-label", "開始即時語音對話");
+  asrModelSelect.disabled = false;
   setVoiceStatus(status);
 }
 
 async function playVoiceResponse(response, signal) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  let scheduler = null;
   let pending = "";
-  let nextStartAt = 0;
-  let lastPlayback = Promise.resolve();
+  let turnId = null;
   let turnReceived = false;
   let audioReceived = false;
   let ttsFailed = false;
+  let completed = false;
 
   const handleEvent = async (event) => {
     if (signal.aborted) throw new DOMException("回覆已中斷。", "AbortError");
     if (event.type === "turn") {
       document.querySelector("#voice-loading-message")?.remove();
       appendAssistantMessage(event.turn);
+      turnId = event.turn.turn_id;
+      scheduler = new VoicePlayback.VoicePlaybackScheduler({
+        audioContext: voiceState.audioContext,
+        destination: voiceState.audioContext.destination,
+        activeSources: voiceState.activeSources,
+        initialBufferSeconds: VoicePlayback.recommendedInitialBufferSeconds(
+          event.turn.result.answer.length,
+        ),
+      });
+      voiceState.playbackScheduler = scheduler;
       turnReceived = true;
       setVoiceStatus("文字回答完成，正在產生語音…按麥克風可中斷");
       return;
@@ -449,42 +516,47 @@ async function playVoiceResponse(response, signal) {
       return;
     }
     if (event.type === "audio") {
+      if (!scheduler) throw new Error("語音播放排程尚未就緒。");
+      const arrivalTimeMs = performance.now();
       const bytes = Uint8Array.from(atob(event.audio), (char) => char.charCodeAt(0));
       const audioBuffer = await voiceState.audioContext.decodeAudioData(bytes.buffer.slice(0));
-      const source = voiceState.audioContext.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(voiceState.audioContext.destination);
-      const now = voiceState.audioContext.currentTime;
-      const startAt = Math.max(now + 0.12, nextStartAt);
-      nextStartAt = startAt + audioBuffer.duration;
-      lastPlayback = new Promise((resolve) => {
-        source.onended = () => {
-          voiceState.activeSources.delete(source);
-          resolve();
-        };
-      });
-      voiceState.activeSources.add(source);
-      source.start(startAt);
+      scheduler.enqueue(audioBuffer, { arrivalTimeMs });
       audioReceived = true;
       voiceButton.classList.add("speaking");
-      setVoiceStatus("正在播放語音回答…按麥克風可中斷並繼續說話");
+      setVoiceStatus(
+        scheduler.started
+          ? "正在播放語音回答…按麥克風可中斷並繼續說話"
+          : "正在緩衝語音回答，確保播放順暢…",
+      );
     }
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = pending.split("\n");
-    pending = lines.pop();
-    for (const line of lines) {
-      if (line.trim()) await handleEvent(JSON.parse(line));
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const lines = pending.split("\n");
+      pending = lines.pop();
+      for (const line of lines) {
+        if (line.trim()) await handleEvent(JSON.parse(line));
+      }
+      if (done) break;
     }
-    if (done) break;
+    if (pending.trim()) await handleEvent(JSON.parse(pending));
+    if (!turnReceived) throw new Error("沒有收到知識助手回答。");
+    if (!audioReceived && !ttsFailed) throw new Error("沒有收到可播放的語音。");
+    if (audioReceived && scheduler) {
+      setVoiceStatus("正在播放語音回答…按麥克風可中斷並繼續說話");
+      await scheduler.finish();
+    }
+    completed = true;
+  } finally {
+    if (!completed) scheduler?.interrupt();
+    if (scheduler && voiceState.playbackScheduler === scheduler) {
+      voiceState.playbackScheduler = null;
+    }
+    if (scheduler) reportVoicePlayback(turnId, scheduler.metrics());
   }
-  if (pending.trim()) await handleEvent(JSON.parse(pending));
-  if (!turnReceived) throw new Error("沒有收到知識助手回答。");
-  if (!audioReceived && !ttsFailed) throw new Error("沒有收到可播放的語音。");
-  await lastPlayback;
 }
 
 async function submitVoiceTurn(transcript) {
@@ -548,6 +620,16 @@ async function loadVoiceConfig() {
     const config = await response.json();
     if (!config.enabled) return;
     voiceState.config = config;
+    const asrModels = [...new Set(config.asr_models || [config.models?.asr])].filter(Boolean);
+    asrModelSelect.replaceChildren();
+    asrModels.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = asrModelLabel(model);
+      asrModelSelect.append(option);
+    });
+    asrModelSelect.value = config.models.asr;
+    asrModelControl.hidden = asrModels.length < 2;
     voiceButton.hidden = false;
     setVoiceStatus(
       config.available ? "按麥克風開始即時語音對話" : "語音模型服務尚未就緒",
@@ -617,5 +699,9 @@ clearButton.addEventListener("click", () => {
 });
 
 voiceButton.addEventListener("click", toggleVoiceSession);
+asrModelSelect.addEventListener("change", () => {
+  closeRealtimeAsr();
+  setVoiceStatus(`已切換為 ${asrModelLabel(selectedAsrModel())}；按麥克風開始測試`);
+});
 loadSystemState();
 loadVoiceConfig();

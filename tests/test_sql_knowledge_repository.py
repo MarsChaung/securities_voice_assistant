@@ -6,6 +6,7 @@ from sqlalchemy import update
 from knowledge_admin.database import KnowledgeSourceRecord
 from knowledge_admin.governance import GovernanceAction, GovernanceActor, KnowledgeRole
 from knowledge_admin.repository import (
+    ASRTermInput,
     DatabaseKnowledgeRepository,
     GovernancePayload,
     QuestionVariantInput,
@@ -35,6 +36,18 @@ def test_sql_repository_only_returns_runtime_eligible_documents(
                 variant_id=None,
                 question_text="每月固定投入台股的方式是什麼？",
                 usage=QuestionVariantUsage.RETRIEVAL,
+            ),
+        ),
+        actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+        expected_version=current.row_version,
+    )
+    current = knowledge_store.update_asr_terms(
+        knowledge_id=current.item.knowledge_id,
+        terms=(
+            ASRTermInput(
+                term_id=None,
+                canonical_term="台股定期定額",
+                aliases=("台股定期定餓",),
             ),
         ),
         actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
@@ -78,6 +91,8 @@ def test_sql_repository_only_returns_runtime_eligible_documents(
     assert eligible[0].item.question_variants[0].question_text == (
         "每月固定投入台股的方式是什麼？"
     )
+    assert eligible[0].item.asr_terms[0].canonical_term == "台股定期定額"
+    assert eligible[0].item.asr_terms[0].aliases == ["台股定期定餓"]
     assert overdue == ()
 
     with knowledge_store.engine.begin() as connection:

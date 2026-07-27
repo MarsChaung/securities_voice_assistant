@@ -8,6 +8,7 @@ from sqlalchemy import Engine, create_engine, inspect
 
 from knowledge_admin.governance import GovernanceAction, GovernanceActor, KnowledgeRole
 from knowledge_admin.repository import (
+    ASRTermInput,
     ConcurrentUpdateError,
     DatabaseKnowledgeRepository,
     GovernancePayload,
@@ -153,6 +154,97 @@ def test_normalized_duplicate_question_variants_are_rejected(
 
     assert inserted == (0, 0)
     assert len(knowledge_store.list_items()) == 15
+
+
+def test_author_can_manage_versioned_asr_terms(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    knowledge_id = "K-CATHAY-DCA-001"
+    created = knowledge_store.update_asr_terms(
+        knowledge_id=knowledge_id,
+        terms=(
+            ASRTermInput(
+                term_id=None,
+                canonical_term="假除權息",
+                aliases=("甲竹全席", "甲雛全息"),
+            ),
+        ),
+        actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+        expected_version=1,
+        now=datetime(2026, 7, 19, tzinfo=UTC),
+    )
+
+    assert created.row_version == 2
+    assert created.item.asr_terms[0].canonical_term == "假除權息"
+    assert created.item.asr_terms[0].aliases == ["甲竹全席", "甲雛全息"]
+    assert knowledge_store.list_events(knowledge_id)[-1].reason == (
+        "ASR 詞彙：新增 1、修改 0、刪除 0"
+    )
+
+    term_id = created.item.asr_terms[0].term_id
+    revised = knowledge_store.update_asr_terms(
+        knowledge_id=knowledge_id,
+        terms=(
+            ASRTermInput(
+                term_id=term_id,
+                canonical_term="假除權息",
+                aliases=("甲竹全席",),
+            ),
+            ASRTermInput(
+                term_id=None,
+                canonical_term="複委託",
+                aliases=("副委託",),
+            ),
+        ),
+        actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+        expected_version=created.row_version,
+    )
+
+    assert [term.canonical_term for term in revised.item.asr_terms] == [
+        "假除權息",
+        "複委託",
+    ]
+    assert knowledge_store.list_events(knowledge_id)[-1].reason == (
+        "ASR 詞彙：新增 1、修改 1、刪除 0"
+    )
+
+
+def test_asr_alias_conflict_is_blocked_when_publishing(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    author = actor("Codex-assisted draft import", KnowledgeRole.AUTHOR)
+    first_id = "K-CATHAY-DCA-001"
+    second_id = "K-CATHAY-DCA-002"
+    knowledge_store.update_asr_terms(
+        knowledge_id=first_id,
+        terms=(
+            ASRTermInput(
+                term_id=None,
+                canonical_term="假除權息",
+                aliases=("甲竹全席",),
+            ),
+        ),
+        actor=author,
+        expected_version=1,
+    )
+    knowledge_store.update_asr_terms(
+        knowledge_id=second_id,
+        terms=(
+            ASRTermInput(
+                term_id=None,
+                canonical_term="除權息參考價",
+                aliases=("甲竹全席",),
+            ),
+        ),
+        actor=author,
+        expected_version=1,
+    )
+    publish_for_revision(knowledge_store, knowledge_id=first_id)
+
+    with pytest.raises(ValueError, match=r"甲竹全席.*K-CATHAY-DCA-001"):
+        publish_for_revision(knowledge_store, knowledge_id=second_id)
+
+    assert knowledge_store.get_item(second_id).item.status is KnowledgeStatus.APPROVED
 
 
 def test_complete_governance_flow_is_persisted(
@@ -400,6 +492,45 @@ def test_published_item_cannot_start_revision_before_review_deadline(
     assert knowledge_store.list_versions(knowledge_id) == ()
 
 
+def test_revoked_item_can_start_a_governed_revision(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    knowledge_id = "K-CATHAY-DCA-001"
+    publish_for_revision(knowledge_store, knowledge_id=knowledge_id)
+    published = knowledge_store.get_item(knowledge_id)
+    revoked = knowledge_store.perform_action(
+        knowledge_id=knowledge_id,
+        action=GovernanceAction.REVOKE,
+        actor=actor("revoker.dev", KnowledgeRole.REVOKER),
+        expected_version=published.row_version,
+        payload=GovernancePayload(reason="需要修訂 ASR 詞彙"),
+        now=datetime(2026, 7, 19, tzinfo=UTC),
+    )
+
+    revised = knowledge_store.perform_action(
+        knowledge_id=knowledge_id,
+        action=GovernanceAction.START_REVOKED_REVISION,
+        actor=actor("Codex-assisted draft import", KnowledgeRole.AUTHOR),
+        expected_version=revoked.row_version,
+        payload=GovernancePayload(reason="新增語音辨識詞彙與 ASR 別名"),
+        now=datetime(2026, 7, 19, tzinfo=UTC),
+    )
+
+    assert revised.item.status is KnowledgeStatus.DRAFT
+    assert revised.item.version == "1.1-draft"
+    assert revised.item.previous_version == "1.0"
+    assert revised.item.public_answer_allowed is False
+    assert revised.item.reviewer is None
+    assert revised.item.approver is None
+    versions = knowledge_store.list_versions(knowledge_id)
+    assert len(versions) == 1
+    assert versions[0].item.status is KnowledgeStatus.REVOKED
+    assert versions[0].item.version == "1.0"
+    assert knowledge_store.list_events(knowledge_id)[-1].action is (
+        GovernanceAction.START_REVOKED_REVISION
+    )
+
+
 def test_alembic_migration_creates_governance_tables(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -420,6 +551,13 @@ def test_alembic_migration_creates_governance_tables(
         "knowledge_question_variants",
         "faq_import_batches",
     } <= table_names
+    columns = {
+        column["name"]
+        for column in inspect(knowledge_store_engine(database_path)).get_columns(
+            "knowledge_items"
+        )
+    }
+    assert "asr_terms" in columns
 
 
 def knowledge_store_engine(database_path: Path) -> Engine:

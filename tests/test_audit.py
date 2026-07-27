@@ -115,3 +115,60 @@ def test_shadow_generation_event_contains_only_review_metadata(
         "fallback_reason": "shadow_only",
     }
     assert generated_answer not in caplog.text
+
+
+def test_voice_playback_event_contains_only_timing_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_content = "客戶問題與語音內容不可進入播放品質日誌"
+
+    with caplog.at_level(logging.INFO, logger="sva.audit"):
+        SafeAuditLogger().voice_playback(
+            turn_id="turn-playback",
+            chunk_count=2,
+            audio_duration_ms=1_000.1234,
+            initial_buffered_ms=1_000.1234,
+            first_playback_delay_ms=1_205.6789,
+            buffer_target_ms=1_200,
+            crossfade_ms=8,
+            underrun_count=1,
+            underrun_total_ms=42.6789,
+            underrun_max_ms=42.6789,
+            interrupted=False,
+            chunk_timings=[
+                {
+                    "arrival_offset_ms": 300.1234,
+                    "duration_ms": 500.1234,
+                    "scheduled_start_offset_ms": 1_240.1234,
+                    "gap_before_ms": 0,
+                },
+                {
+                    "arrival_offset_ms": 900.1234,
+                    "duration_ms": 500,
+                    "scheduled_start_offset_ms": 1_782.1234,
+                    "gap_before_ms": 42.6789,
+                },
+            ],
+        )
+
+    record = next(record for record in caplog.records if "voice_playback" in record.message)
+    event = json.loads(record.getMessage().removeprefix("voice_playback "))
+    assert set(event) == {
+        "schema_version",
+        "turn_id",
+        "chunk_count",
+        "audio_duration_ms",
+        "initial_buffered_ms",
+        "first_playback_delay_ms",
+        "buffer_target_ms",
+        "crossfade_ms",
+        "underrun_count",
+        "underrun_total_ms",
+        "underrun_max_ms",
+        "interrupted",
+        "chunk_timings",
+    }
+    assert event["schema_version"] == "1.0"
+    assert event["underrun_total_ms"] == 42.679
+    assert event["chunk_timings"][1]["gap_before_ms"] == 42.679
+    assert private_content not in caplog.text

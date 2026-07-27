@@ -42,6 +42,40 @@ class QuestionVariant(BaseModel):
         return normalized
 
 
+class ASRTerm(BaseModel):
+    term_id: str = Field(min_length=1, max_length=36)
+    canonical_term: str = Field(min_length=2, max_length=100)
+    aliases: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("canonical_term")
+    @classmethod
+    def normalize_canonical_term(cls, value: str) -> str:
+        normalized = " ".join(value.split()).strip("「」")
+        if len(normalized) < 2:
+            raise ValueError("語音辨識詞彙至少需要 2 個字元")
+        return normalized
+
+    @field_validator("aliases")
+    @classmethod
+    def normalize_aliases(cls, values: list[str]) -> list[str]:
+        aliases = [" ".join(value.split()).strip("「」") for value in values]
+        if any(len(alias) < 2 or len(alias) > 100 for alias in aliases):
+            raise ValueError("ASR 別名長度必須介於 2 到 100 個字元")
+        return aliases
+
+    @model_validator(mode="after")
+    def enforce_unique_aliases(self) -> "ASRTerm":
+        canonical_key = _normalize_asr_text(self.canonical_term)
+        alias_keys = [_normalize_asr_text(alias) for alias in self.aliases]
+        if any(not key for key in alias_keys):
+            raise ValueError("ASR 別名必須包含文字或數字")
+        if canonical_key in alias_keys:
+            raise ValueError("ASR 別名不得與語音辨識詞彙相同")
+        if len(alias_keys) != len(set(alias_keys)):
+            raise ValueError("同一語音辨識詞彙的 ASR 別名不得重複")
+        return self
+
+
 class KnowledgeSource(BaseModel):
     source_id: str = Field(pattern=r"^SRC-[A-Z0-9-]+$")
     supplied_url: str | None = None
@@ -104,6 +138,7 @@ class KnowledgeItem(BaseModel):
     allowed_intents: list[str] = Field(min_length=1)
     prohibited_extensions: list[str] = Field(min_length=1)
     question_variants: list[QuestionVariant] = Field(default_factory=list)
+    asr_terms: list[ASRTerm] = Field(default_factory=list, max_length=50)
 
     @field_validator("source_uri", mode="before")
     @classmethod
@@ -150,6 +185,21 @@ class KnowledgeItem(BaseModel):
         if self.effective_at and self.expires_at and self.expires_at <= self.effective_at:
             raise ValueError("expires_at 必須晚於 effective_at")
 
+        canonical_keys: set[str] = set()
+        alias_keys: set[str] = set()
+        for term in self.asr_terms:
+            canonical_key = _normalize_asr_text(term.canonical_term)
+            if canonical_key in canonical_keys:
+                raise ValueError("同一知識項目的語音辨識詞彙不得重複")
+            canonical_keys.add(canonical_key)
+            for alias in term.aliases:
+                alias_key = _normalize_asr_text(alias)
+                if alias_key in alias_keys:
+                    raise ValueError("同一知識項目的 ASR 別名不得重複")
+                alias_keys.add(alias_key)
+        if canonical_keys.intersection(alias_keys):
+            raise ValueError("ASR 別名不得與同一知識項目的語音辨識詞彙衝突")
+
         return self
 
 
@@ -163,3 +213,7 @@ class KnowledgeDocument:
 class RetrievalMatch:
     document: KnowledgeDocument
     score: float
+
+
+def _normalize_asr_text(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
