@@ -10,14 +10,16 @@ const voiceButton = document.querySelector("#voice-button");
 const voiceStatus = document.querySelector("#voice-status");
 const asrModelControl = document.querySelector("#asr-model-control");
 const asrModelSelect = document.querySelector("#asr-model");
+const bargeInControl = document.querySelector("#barge-in-control");
+const bargeInModeSelect = document.querySelector("#barge-in-mode");
 const initialMessage = messages.firstElementChild.cloneNode(true);
 const voiceState = {
   config: null,
   stream: null,
   audioContext: null,
   microphoneSource: null,
-  processor: null,
-  silentGain: null,
+  captureNode: null,
+  captureWorkletReady: false,
   socket: null,
   socketPromise: null,
   socketReady: false,
@@ -29,6 +31,11 @@ const voiceState = {
   activeSources: new Set(),
   playbackScheduler: null,
   partialTranscript: "",
+  replyDisplayed: false,
+  bargeInDetector: null,
+  bargeInStreaming: false,
+  preRollFrames: [],
+  preRollSamples: 0,
 };
 
 function selectedAsrModel() {
@@ -45,6 +52,11 @@ function asrUsesTokenStreaming(model) {
 
 function asrModelLabel(model) {
   return model.split("/").pop() || model;
+}
+
+function selectedBargeInPreset() {
+  const presets = voiceState.config?.barge_in?.presets || [];
+  return presets.find((preset) => preset.id === bargeInModeSelect.value) || presets[0];
 }
 
 function closeRealtimeAsr() {
@@ -262,7 +274,7 @@ function downsampleToInt16(inputSamples, sourceRate, targetRate = 16000) {
 async function ensureMicrophone() {
   if (!voiceState.stream) {
     voiceState.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
     });
   }
   if (!voiceState.audioContext) {
@@ -271,27 +283,33 @@ async function ensureMicrophone() {
       voiceState.stream,
     );
   }
+  if (!voiceState.captureWorkletReady) {
+    if (!voiceState.audioContext.audioWorklet) {
+      throw new Error("目前瀏覽器不支援低延遲 AudioWorklet。");
+    }
+    const assetVersion = document.documentElement.dataset.assetVersion || "dev";
+    await voiceState.audioContext.audioWorklet.addModule(
+      `/pilot/static/voice-capture-worklet.js?v=${encodeURIComponent(assetVersion)}`,
+    );
+    voiceState.captureWorkletReady = true;
+  }
   await voiceState.audioContext.resume();
 }
 
 function stopRealtimeCapture() {
-  if (voiceState.processor) {
+  if (voiceState.captureNode) {
     try {
-      voiceState.microphoneSource.disconnect(voiceState.processor);
+      voiceState.microphoneSource.disconnect(voiceState.captureNode);
     } catch {}
-    voiceState.processor.disconnect();
-    voiceState.processor.onaudioprocess = null;
-    voiceState.processor = null;
-  }
-  if (voiceState.silentGain) {
-    voiceState.silentGain.disconnect();
-    voiceState.silentGain = null;
+    voiceState.captureNode.port.onmessage = null;
+    voiceState.captureNode.disconnect();
+    voiceState.captureNode = null;
   }
 }
 
-function stopVoicePlayback() {
+function stopVoicePlayback(reason = "manual", bargeInMetrics = null) {
   if (voiceState.playbackScheduler) {
-    voiceState.playbackScheduler.interrupt();
+    voiceState.playbackScheduler.interrupt(reason, bargeInMetrics);
     voiceState.playbackScheduler = null;
     return;
   }
@@ -301,6 +319,97 @@ function stopVoicePlayback() {
     } catch {}
   }
   voiceState.activeSources.clear();
+}
+
+function resetPreRoll() {
+  voiceState.preRollFrames = [];
+  voiceState.preRollSamples = 0;
+}
+
+function rememberPreRoll(pcm) {
+  const preset = selectedBargeInPreset();
+  if (!preset) return;
+  voiceState.preRollFrames.push(pcm);
+  voiceState.preRollSamples += pcm.length;
+  const maximumSamples = Math.ceil((preset.pre_roll_ms / 1000) * 16000);
+  while (
+    voiceState.preRollFrames.length > 1
+    && voiceState.preRollSamples > maximumSamples
+  ) {
+    voiceState.preRollSamples -= voiceState.preRollFrames.shift().length;
+  }
+}
+
+function sendAsrFrame(pcm) {
+  if (pcm.length && voiceState.socket?.readyState === WebSocket.OPEN) {
+    voiceState.socket.send(pcm.buffer);
+  }
+}
+
+function flushPreRoll() {
+  for (const frame of voiceState.preRollFrames) sendAsrFrame(frame);
+  resetPreRoll();
+}
+
+function cancelBargeInCandidate() {
+  if (voiceState.bargeInStreaming && voiceState.socket?.readyState === WebSocket.OPEN) {
+    voiceState.socket.send(JSON.stringify({ action: "cancel" }));
+  }
+  voiceState.bargeInStreaming = false;
+  resetPreRoll();
+}
+
+function configureBargeInDetector() {
+  const preset = selectedBargeInPreset();
+  if (!preset || !voiceState.config?.barge_in?.enabled) {
+    voiceState.bargeInDetector = null;
+    return;
+  }
+  voiceState.bargeInDetector = new VoiceBargeIn.BargeInDetector({
+    preset,
+    onDuck: () => {
+      if (!voiceState.replying || !voiceState.playbackScheduler?.started) return;
+      const activePreset = selectedBargeInPreset();
+      voiceState.playbackScheduler.duck(
+        activePreset.duck_volume,
+        activePreset.fade_out_ms,
+      );
+      voiceState.bargeInStreaming = true;
+      flushPreRoll();
+      setVoiceStatus("偵測到你可能正在插話，正在確認…");
+    },
+    onRestore: () => {
+      const activePreset = selectedBargeInPreset();
+      voiceState.playbackScheduler?.restore(activePreset.fade_out_ms);
+      cancelBargeInCandidate();
+      setVoiceStatus("已忽略短促聲音，繼續播放語音回答…");
+    },
+    onConfirm: (metrics) => {
+      if (!voiceState.replying || !voiceState.playbackScheduler) return;
+      voiceState.playbackScheduler.interrupt("barge_in", metrics);
+      voiceState.playbackScheduler = null;
+      voiceState.replyController?.abort();
+      voiceState.listening = true;
+      voiceState.bargeInStreaming = true;
+      voiceButton.classList.remove("speaking");
+      voiceButton.classList.add("listening");
+      setVoiceStatus("已停止回答，正在聽你接著說…");
+    },
+  });
+}
+
+function armBargeIn() {
+  if (!voiceState.bargeInDetector) return;
+  voiceState.bargeInDetector.setPreset(selectedBargeInPreset());
+  voiceState.bargeInStreaming = false;
+  resetPreRoll();
+  voiceState.bargeInDetector.arm();
+}
+
+function disarmBargeIn({ restore = false } = {}) {
+  voiceState.bargeInDetector?.disarm({ restore });
+  voiceState.bargeInStreaming = false;
+  resetPreRoll();
 }
 
 function reportVoicePlayback(turnId, metrics) {
@@ -315,23 +424,44 @@ function reportVoicePlayback(turnId, metrics) {
 
 function startRealtimeCapture() {
   stopRealtimeCapture();
-  voiceState.partialTranscript = "";
-  const processor = voiceState.audioContext.createScriptProcessor(2048, 1, 1);
-  const gain = voiceState.audioContext.createGain();
-  gain.gain.value = 0;
-  processor.onaudioprocess = (event) => {
-    if (!voiceState.listening || voiceState.socket?.readyState !== WebSocket.OPEN) return;
+  const captureNode = new AudioWorkletNode(
+    voiceState.audioContext,
+    "voice-capture-processor",
+    {
+      numberOfInputs: 1,
+      numberOfOutputs: 0,
+      channelCount: 1,
+      channelCountMode: "explicit",
+    },
+  );
+  captureNode.port.onmessage = (event) => {
+    if (
+      event.data?.type !== "audio-frame"
+      || voiceState.socket?.readyState !== WebSocket.OPEN
+    ) return;
     const pcm = downsampleToInt16(
-      event.inputBuffer.getChannelData(0),
+      event.data.samples,
       voiceState.audioContext.sampleRate,
     );
-    if (pcm.length) voiceState.socket.send(pcm.buffer);
+    if (!pcm.length) return;
+
+    if (voiceState.listening) {
+      sendAsrFrame(pcm);
+      return;
+    }
+    if (
+      !voiceState.replying
+      || !voiceState.playbackScheduler?.started
+      || !voiceState.bargeInDetector
+    ) return;
+
+    rememberPreRoll(pcm);
+    const wasStreaming = voiceState.bargeInStreaming;
+    voiceState.bargeInDetector.processLevel(event.data.dbfs);
+    if (wasStreaming && voiceState.bargeInStreaming) sendAsrFrame(pcm);
   };
-  voiceState.microphoneSource.connect(processor);
-  processor.connect(gain);
-  gain.connect(voiceState.audioContext.destination);
-  voiceState.processor = processor;
-  voiceState.silentGain = gain;
+  voiceState.microphoneSource.connect(captureNode);
+  voiceState.captureNode = captureNode;
 }
 
 function handleRealtimeAsrEvent(data) {
@@ -357,6 +487,12 @@ function handleRealtimeAsrEvent(data) {
     );
     return;
   }
+  if (data.type === "speech_start") {
+    if (voiceState.replying && voiceState.bargeInStreaming) {
+      voiceState.bargeInDetector?.markSpeech();
+    }
+    return;
+  }
   if (data.type === "speech_resumed") {
     setVoiceStatus("偵測到你繼續說話，持續聆聽中…");
     return;
@@ -371,6 +507,12 @@ function handleRealtimeAsrEvent(data) {
     stopRealtimeCapture();
     voiceButton.classList.remove("listening");
     const transcript = (data.text || voiceState.partialTranscript).trim();
+    if (VoiceBargeIn.isNonActionableUtterance(transcript)) {
+      voiceState.partialTranscript = "";
+      setVoiceStatus("聽到了，請繼續說你的問題…");
+      if (voiceState.continuous) void startVoiceListening();
+      return;
+    }
     void submitVoiceTurn(transcript);
   }
 }
@@ -448,10 +590,13 @@ async function ensureRealtimeAsr() {
 async function startVoiceListening() {
   try {
     asrModelSelect.disabled = true;
+    bargeInModeSelect.disabled = true;
     await ensureMicrophone();
     setVoiceStatus("正在準備即時語音辨識…");
     await ensureRealtimeAsr();
     if (!voiceState.continuous) return;
+    disarmBargeIn();
+    voiceState.partialTranscript = "";
     voiceState.listening = true;
     voiceButton.classList.remove("speaking");
     voiceButton.classList.add("listening");
@@ -469,6 +614,7 @@ function stopVoiceSession(status = "語音對話已停止；按麥克風可重�
   voiceState.replying = false;
   voiceState.replyController?.abort();
   voiceState.replyController = null;
+  disarmBargeIn();
   stopRealtimeCapture();
   stopVoicePlayback();
   if (voiceState.socket?.readyState === WebSocket.OPEN) {
@@ -477,6 +623,7 @@ function stopVoiceSession(status = "語音對話已停止；按麥克風可重�
   voiceButton.classList.remove("listening", "speaking");
   voiceButton.setAttribute("aria-label", "開始即時語音對話");
   asrModelSelect.disabled = false;
+  bargeInModeSelect.disabled = false;
   setVoiceStatus(status);
 }
 
@@ -496,6 +643,7 @@ async function playVoiceResponse(response, signal) {
     if (event.type === "turn") {
       document.querySelector("#voice-loading-message")?.remove();
       appendAssistantMessage(event.turn);
+      voiceState.replyDisplayed = true;
       turnId = event.turn.turn_id;
       scheduler = new VoicePlayback.VoicePlaybackScheduler({
         audioContext: voiceState.audioContext,
@@ -506,8 +654,12 @@ async function playVoiceResponse(response, signal) {
         ),
       });
       voiceState.playbackScheduler = scheduler;
+      if (voiceState.config?.barge_in?.enabled) {
+        armBargeIn();
+        startRealtimeCapture();
+      }
       turnReceived = true;
-      setVoiceStatus("文字回答完成，正在產生語音…按麥克風可中斷");
+      setVoiceStatus("文字回答完成，正在產生語音…可直接說話中斷");
       return;
     }
     if (event.type === "error") {
@@ -525,7 +677,7 @@ async function playVoiceResponse(response, signal) {
       voiceButton.classList.add("speaking");
       setVoiceStatus(
         scheduler.started
-          ? "正在播放語音回答…按麥克風可中斷並繼續說話"
+          ? "正在播放語音回答…可直接說話中斷"
           : "正在緩衝語音回答，確保播放順暢…",
       );
     }
@@ -546,7 +698,7 @@ async function playVoiceResponse(response, signal) {
     if (!turnReceived) throw new Error("沒有收到知識助手回答。");
     if (!audioReceived && !ttsFailed) throw new Error("沒有收到可播放的語音。");
     if (audioReceived && scheduler) {
-      setVoiceStatus("正在播放語音回答…按麥克風可中斷並繼續說話");
+      setVoiceStatus("正在播放語音回答…可直接說話中斷");
       await scheduler.finish();
     }
     completed = true;
@@ -555,7 +707,14 @@ async function playVoiceResponse(response, signal) {
     if (scheduler && voiceState.playbackScheduler === scheduler) {
       voiceState.playbackScheduler = null;
     }
-    if (scheduler) reportVoicePlayback(turnId, scheduler.metrics());
+    if (scheduler && voiceState.bargeInDetector) {
+      scheduler.recordBargeInMetrics?.(voiceState.bargeInDetector.metrics());
+    }
+    if (scheduler?.metrics) reportVoicePlayback(turnId, scheduler.metrics());
+    if (!voiceState.listening) {
+      disarmBargeIn();
+      stopRealtimeCapture();
+    }
   }
 }
 
@@ -569,6 +728,7 @@ async function submitVoiceTurn(transcript) {
   appendLoading("voice-loading-message");
   setVoiceStatus("正在查核核准知識與安全邊界…");
   voiceState.replying = true;
+  voiceState.replyDisplayed = false;
   voiceButton.classList.add("speaking");
   const controller = new AbortController();
   voiceState.replyController = controller;
@@ -583,11 +743,18 @@ async function submitVoiceTurn(transcript) {
     await playVoiceResponse(response, controller.signal);
     setVoiceStatus("本輪完成，正在重新開啟麥克風…");
   } catch (error) {
-    if (error.name !== "AbortError") {
+    const disposition = VoicePlayback.voiceFailureDisposition(
+      error.name,
+      voiceState.replyDisplayed,
+    );
+    if (disposition === "service_unavailable") {
       document.querySelector("#voice-loading-message")?.remove();
       appendNetworkError();
       stopVoiceSession(`語音處理失敗：${error.message}`);
       return;
+    }
+    if (disposition === "playback_degraded") {
+      setVoiceStatus("文字回答已保留；語音播放未完整完成，正在重新開啟麥克風…");
     }
   } finally {
     if (voiceState.replyController === controller) voiceState.replyController = null;
@@ -599,6 +766,8 @@ async function submitVoiceTurn(transcript) {
 
 async function toggleVoiceSession() {
   if (voiceState.replying) {
+    cancelBargeInCandidate();
+    disarmBargeIn();
     voiceState.replyController?.abort();
     stopVoicePlayback();
     voiceState.replying = false;
@@ -630,6 +799,17 @@ async function loadVoiceConfig() {
     });
     asrModelSelect.value = config.models.asr;
     asrModelControl.hidden = asrModels.length < 2;
+    const bargeIn = config.barge_in;
+    bargeInModeSelect.replaceChildren();
+    for (const preset of bargeIn?.presets || []) {
+      const option = document.createElement("option");
+      option.value = preset.id;
+      option.textContent = preset.label;
+      bargeInModeSelect.append(option);
+    }
+    bargeInModeSelect.value = bargeIn?.default_mode || "standard";
+    bargeInControl.hidden = !bargeIn?.enabled;
+    configureBargeInDetector();
     voiceButton.hidden = false;
     setVoiceStatus(
       config.available ? "按麥克風開始即時語音對話" : "語音模型服務尚未就緒",
@@ -702,6 +882,11 @@ voiceButton.addEventListener("click", toggleVoiceSession);
 asrModelSelect.addEventListener("change", () => {
   closeRealtimeAsr();
   setVoiceStatus(`已切換為 ${asrModelLabel(selectedAsrModel())}；按麥克風開始測試`);
+});
+bargeInModeSelect.addEventListener("change", () => {
+  configureBargeInDetector();
+  const preset = selectedBargeInPreset();
+  setVoiceStatus(`插話偵測已切換為「${preset?.label || "標準"}」模式`);
 });
 loadSystemState();
 loadVoiceConfig();

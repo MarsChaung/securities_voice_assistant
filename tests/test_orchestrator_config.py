@@ -136,3 +136,12 @@ def test_voice_clone_requires_reference_audio_and_text_together() -> None:
             tts_ref_audio="/private/reference.wav",
             tts_ref_text=None,
         )
+
+
+def test_barge_in_default_mode_is_restricted_to_governed_presets() -> None:
+    with pytest.raises(ValidationError, match="barge_in_default_mode"):
+        Settings(
+            database_url="sqlite+pysqlite:///:memory:",
+            retrieval_mode="lexical",
+            barge_in_default_mode="custom",
+        )

@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   VoicePlaybackScheduler,
   recommendedInitialBufferSeconds,
+  voiceFailureDisposition,
 } = require("../../services/orchestrator/src/orchestrator/static/voice-playback.js");
 
 class FakeAudioParam {
@@ -77,6 +78,21 @@ test("scales the initial buffer for long answers and caps the delay", () => {
   assert.equal(recommendedInitialBufferSeconds(50), 2);
   assert.equal(recommendedInitialBufferSeconds(100), 3);
   assert.equal(recommendedInitialBufferSeconds(1000), 3);
+});
+
+test("does not report a service outage after the text answer is already visible", () => {
+  assert.equal(
+    voiceFailureDisposition("TypeError", true),
+    "playback_degraded",
+  );
+  assert.equal(
+    voiceFailureDisposition("TypeError", false),
+    "service_unavailable",
+  );
+  assert.equal(
+    voiceFailureDisposition("AbortError", true),
+    "interrupted",
+  );
 });
 
 test("starts buffered audio when the 2.8 second wait limit is reached", async () => {
@@ -207,4 +223,35 @@ test("flushes a short response when the stream ends", async () => {
   assert.equal(context.sources.length, 1);
   assert.equal(metrics.initial_buffered_ms, 400);
   assert.equal(metrics.chunk_count, 1);
+});
+
+test("ducks, restores, and records governed barge-in metrics", () => {
+  const context = new FakeAudioContext();
+  const scheduler = new VoicePlaybackScheduler({
+    audioContext: context,
+    destination: context.destination,
+    activeSources: new Set(),
+  });
+
+  scheduler.duck(0.15, 50);
+  scheduler.restore(50);
+  scheduler.interrupt("barge_in", {
+    mode: "standard",
+    duck_latency_ms: 100,
+    confirm_latency_ms: 250,
+    false_trigger_count: 1,
+  });
+
+  const metrics = scheduler.metrics();
+  assert.equal(metrics.interruption_reason, "barge_in");
+  assert.equal(metrics.barge_in_mode, "standard");
+  assert.equal(metrics.barge_in_duck_latency_ms, 100);
+  assert.equal(metrics.barge_in_confirm_latency_ms, 250);
+  assert.equal(metrics.barge_in_false_trigger_count, 1);
+  assert.deepEqual(context.gains[0].gain.events.slice(-4), [
+    ["set", 1, 0],
+    ["ramp", 0.15, 0.05],
+    ["set", 0.15, 0],
+    ["ramp", 1, 0.05],
+  ]);
 });

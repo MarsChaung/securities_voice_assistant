@@ -159,6 +159,11 @@ class TurnService:
         underrun_total_ms: float,
         underrun_max_ms: float,
         interrupted: bool,
+        interruption_reason: str | None,
+        barge_in_mode: str | None,
+        barge_in_duck_latency_ms: float | None,
+        barge_in_confirm_latency_ms: float | None,
+        barge_in_false_trigger_count: int,
         chunk_timings: list[dict[str, float | None]],
     ) -> None:
         self._audit_logger.voice_playback(
@@ -173,6 +178,11 @@ class TurnService:
             underrun_total_ms=underrun_total_ms,
             underrun_max_ms=underrun_max_ms,
             interrupted=interrupted,
+            interruption_reason=interruption_reason,
+            barge_in_mode=barge_in_mode,
+            barge_in_duck_latency_ms=barge_in_duck_latency_ms,
+            barge_in_confirm_latency_ms=barge_in_confirm_latency_ms,
+            barge_in_false_trigger_count=barge_in_false_trigger_count,
             chunk_timings=chunk_timings,
         )
 

@@ -5,12 +5,52 @@ import wave
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from time import perf_counter
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from observability import SafeAuditLogger
+
+BARGE_IN_PRESETS: tuple[dict[str, str | int | float], ...] = (
+    {
+        "id": "sensitive",
+        "label": "靈敏",
+        "duck_after_ms": 80,
+        "confirm_ms": 180,
+        "energy_margin_db": 10,
+        "minimum_dbfs": -50,
+        "pre_roll_ms": 300,
+        "false_trigger_timeout_ms": 300,
+        "duck_volume": 0.15,
+        "fade_out_ms": 50,
+    },
+    {
+        "id": "standard",
+        "label": "標準",
+        "duck_after_ms": 100,
+        "confirm_ms": 250,
+        "energy_margin_db": 14,
+        "minimum_dbfs": -45,
+        "pre_roll_ms": 300,
+        "false_trigger_timeout_ms": 400,
+        "duck_volume": 0.15,
+        "fade_out_ms": 50,
+    },
+    {
+        "id": "resistant",
+        "label": "抗干擾",
+        "duck_after_ms": 150,
+        "confirm_ms": 400,
+        "energy_margin_db": 18,
+        "minimum_dbfs": -38,
+        "pre_roll_ms": 350,
+        "false_trigger_timeout_ms": 500,
+        "duck_volume": 0.12,
+        "fade_out_ms": 50,
+    },
+)
 
 
 def realtime_asr_url(audio_public_base_url: str) -> str:
@@ -115,6 +155,11 @@ class VoicePlaybackMetrics(BaseModel):
     underrun_total_ms: float = Field(ge=0, le=600_000)
     underrun_max_ms: float = Field(ge=0, le=60_000)
     interrupted: bool
+    interruption_reason: Literal["manual", "barge_in"] | None = None
+    barge_in_mode: Literal["sensitive", "standard", "resistant"] | None = None
+    barge_in_duck_latency_ms: float | None = Field(default=None, ge=0, le=10_000)
+    barge_in_confirm_latency_ms: float | None = Field(default=None, ge=0, le=10_000)
+    barge_in_false_trigger_count: int = Field(default=0, ge=0, le=300)
     chunk_timings: list[VoicePlaybackChunkMetric] = Field(max_length=300)
 
 

@@ -53,6 +53,8 @@ services:
       SVA_TTS_REF_AUDIO: ${SVA_TTS_REF_AUDIO:-}
       SVA_TTS_REF_TEXT: ${SVA_TTS_REF_TEXT:-}
       SVA_VOICE_TIMEOUT_SECONDS: ${SVA_VOICE_TIMEOUT_SECONDS:-180}
+      SVA_BARGE_IN_ENABLED: ${SVA_BARGE_IN_ENABLED:-true}
+      SVA_BARGE_IN_DEFAULT_MODE: ${SVA_BARGE_IN_DEFAULT_MODE:-standard}
     depends_on:
       postgres:
         condition: service_healthy

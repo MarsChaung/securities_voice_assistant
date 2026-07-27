@@ -21,6 +21,11 @@
     );
   }
 
+  function voiceFailureDisposition(errorName, replyDisplayed) {
+    if (errorName === "AbortError") return "interrupted";
+    return replyDisplayed ? "playback_degraded" : "service_unavailable";
+  }
+
   class VoicePlaybackScheduler {
     constructor({
       audioContext,
@@ -36,6 +41,10 @@
       this.audioContext = audioContext;
       this.destination = destination;
       this.activeSources = activeSources;
+      this.outputGain = audioContext.createGain();
+      this.outputGain.gain.setValueAtTime(1, audioContext.currentTime);
+      this.outputGain.connect(destination);
+      this.outputVolume = 1;
       this.initialBufferSeconds = initialBufferSeconds;
       this.crossfadeSeconds = crossfadeSeconds;
       this.minimumLeadSeconds = minimumLeadSeconds;
@@ -49,6 +58,8 @@
       this.previousEndAt = null;
       this.lastPlayback = Promise.resolve();
       this.interrupted = false;
+      this.interruptionReason = null;
+      this.bargeInMetrics = null;
       this.chunkTimings = [];
       this.underrunCount = 0;
       this.underrunTotalMs = 0;
@@ -94,8 +105,22 @@
       return this.metrics();
     }
 
-    interrupt() {
+    duck(volume = 0.15, fadeMs = 50) {
+      this._setOutputVolume(volume, fadeMs);
+    }
+
+    restore(fadeMs = 50) {
+      this._setOutputVolume(1, fadeMs);
+    }
+
+    recordBargeInMetrics(metrics) {
+      this.bargeInMetrics = metrics ? { ...metrics } : null;
+    }
+
+    interrupt(reason = "manual", bargeInMetrics = null) {
       this.interrupted = true;
+      this.interruptionReason = reason;
+      if (bargeInMetrics) this.recordBargeInMetrics(bargeInMetrics);
       this._clearInitialWaitTimer();
       for (const source of [...this.activeSources]) {
         try {
@@ -120,8 +145,26 @@
         underrun_total_ms: this.underrunTotalMs,
         underrun_max_ms: this.underrunMaxMs,
         interrupted: this.interrupted,
+        interruption_reason: this.interruptionReason,
+        barge_in_mode: this.bargeInMetrics?.mode || null,
+        barge_in_duck_latency_ms: this.bargeInMetrics?.duck_latency_ms ?? null,
+        barge_in_confirm_latency_ms: this.bargeInMetrics?.confirm_latency_ms ?? null,
+        barge_in_false_trigger_count:
+          this.bargeInMetrics?.false_trigger_count || 0,
         chunk_timings: this.chunkTimings.map((timing) => ({ ...timing })),
       };
+    }
+
+    _setOutputVolume(volume, fadeMs) {
+      const target = Math.max(0, Math.min(1, volume));
+      const now = this.audioContext.currentTime;
+      this.outputGain.gain.cancelScheduledValues?.(now);
+      this.outputGain.gain.setValueAtTime(this.outputVolume, now);
+      this.outputGain.gain.linearRampToValueAtTime(
+        target,
+        now + Math.max(0, fadeMs) / 1000,
+      );
+      this.outputVolume = target;
     }
 
     _startQueuedPlayback() {
@@ -174,7 +217,7 @@
       );
       source.buffer = audioBuffer;
       source.connect(gain);
-      gain.connect(this.destination);
+      gain.connect(this.outputGain);
       gain.gain.setValueAtTime(0, startAt);
       gain.gain.linearRampToValueAtTime(1, startAt + fadeSeconds);
       gain.gain.setValueAtTime(1, endAt - fadeSeconds);
@@ -203,5 +246,6 @@
     MAXIMUM_INITIAL_WAIT_SECONDS,
     VoicePlaybackScheduler,
     recommendedInitialBufferSeconds,
+    voiceFailureDisposition,
   };
 });

@@ -83,7 +83,7 @@ class VoicePlaybackChunkTiming:
 
 @dataclass(frozen=True)
 class VoicePlaybackEvent:
-    schema_version: str = field(init=False, default="1.0")
+    schema_version: str = field(init=False, default="1.1")
     turn_id: str
     chunk_count: int
     audio_duration_ms: float
@@ -95,6 +95,11 @@ class VoicePlaybackEvent:
     underrun_total_ms: float
     underrun_max_ms: float
     interrupted: bool
+    interruption_reason: str | None
+    barge_in_mode: str | None
+    barge_in_duck_latency_ms: float | None
+    barge_in_confirm_latency_ms: float | None
+    barge_in_false_trigger_count: int
     chunk_timings: tuple[VoicePlaybackChunkTiming, ...]
 
 
@@ -274,6 +279,11 @@ class SafeAuditLogger:
         underrun_total_ms: float,
         underrun_max_ms: float,
         interrupted: bool,
+        interruption_reason: str | None,
+        barge_in_mode: str | None,
+        barge_in_duck_latency_ms: float | None,
+        barge_in_confirm_latency_ms: float | None,
+        barge_in_false_trigger_count: int,
         chunk_timings: Sequence[Mapping[str, float | None]],
     ) -> None:
         event = VoicePlaybackEvent(
@@ -292,6 +302,19 @@ class SafeAuditLogger:
             underrun_total_ms=round(underrun_total_ms, 3),
             underrun_max_ms=round(underrun_max_ms, 3),
             interrupted=interrupted,
+            interruption_reason=interruption_reason,
+            barge_in_mode=barge_in_mode,
+            barge_in_duck_latency_ms=(
+                round(barge_in_duck_latency_ms, 3)
+                if barge_in_duck_latency_ms is not None
+                else None
+            ),
+            barge_in_confirm_latency_ms=(
+                round(barge_in_confirm_latency_ms, 3)
+                if barge_in_confirm_latency_ms is not None
+                else None
+            ),
+            barge_in_false_trigger_count=barge_in_false_trigger_count,
             chunk_timings=tuple(
                 VoicePlaybackChunkTiming(
                     arrival_offset_ms=_required_metric(chunk, "arrival_offset_ms"),

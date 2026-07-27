@@ -171,16 +171,27 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
     page = client.get("/pilot")
     script = client.get("/pilot/static/pilot.js")
     playback_script = client.get("/pilot/static/voice-playback.js")
+    barge_in_script = client.get("/pilot/static/voice-barge-in.js")
+    capture_worklet = client.get("/pilot/static/voice-capture-worklet.js")
 
     assert redirect.status_code == 307
     assert redirect.headers["location"] == "/pilot"
     assert page.status_code == 200
     assert 'id="question-form"' in page.text
     assert 'id="asr-model"' in page.text
+    assert 'id="barge-in-mode"' in page.text
     assert "不要輸入帳號、密碼、驗證碼或個人資料" in page.text
     assert script.status_code == 200
     assert playback_script.status_code == 200
-    assert "voice-playback.js" in page.text
+    assert barge_in_script.status_code == 200
+    assert capture_worklet.status_code == 200
+    assert "voice-playback.js?v=" in page.text
+    assert "voice-barge-in.js?v=" in page.text
+    assert "pilot.js?v=" in page.text
+    assert "pilot.css?v=" in page.text
+    assert "numberOfOutputs: 0" in script.text
+    assert "silentGain" not in script.text
+    assert "VoiceBargeIn.isNonActionableUtterance(transcript)" in script.text
     assert "localStorage" not in script.text
 
 

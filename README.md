@@ -44,7 +44,7 @@ API 文件：<http://127.0.0.1:8080/docs>
 
 本機 LLM 推論平台管理介面：<http://127.0.0.1:12345/admin>。管理密碼只保存在被 Git 忽略的 `.env` 變數 `SVA_LLM_ADMIN_PASSWORD`；若 embeddings 或其他本機模型尚未安裝，可從該管理介面下載。
 
-Pilot 會顯示目前可回答知識筆數，並呈現答案、澄清、拒答或轉人工狀態、官方來源、決策資訊及二元回饋。啟用語音服務後，麥克風按鈕會使用 MLX Audio 即時 ASR 自動判斷句尾，並優先以當下有效知識中受治理的語音辨識詞彙提供領域提示，未設定時才使用標題與產品名稱。辨識文字會進入同一安全決策管線；安全問題若一般檢索無結果，會先比對人工確認的 ASR 別名，再以受控音近候選比對核准知識，唯一高信心候選才回答，有歧義則要求重述。播放期間按麥克風可中斷並繼續說話。瀏覽器不使用 localStorage 保存問答內容，重新整理或按下「清除畫面」就會移除畫面中的對話。詳見 [ADR-0010](docs/architecture_decisions/0010-governed-asr-phonetic-recovery.md) 與 [ADR-0011](docs/architecture_decisions/0011-versioned-asr-vocabulary.md)。
+Pilot 會顯示目前可回答知識筆數，並呈現答案、澄清、拒答或轉人工狀態、官方來源、決策資訊及二元回饋。啟用語音服務後，麥克風按鈕會使用 MLX Audio 即時 ASR 自動判斷句尾，並優先以當下有效知識中受治理的語音辨識詞彙提供領域提示，未設定時才使用標題與產品名稱。辨識文字會進入同一安全決策管線；安全問題若一般檢索無結果，會先比對人工確認的 ASR 別名，再以受控音近候選比對核准知識，唯一高信心候選才回答，有歧義則要求重述。播放期間可直接說話自動中斷，麥克風按鈕仍保留為手動備援。瀏覽器不使用 localStorage 保存問答內容，重新整理或按下「清除畫面」就會移除畫面中的對話。詳見 [ADR-0010](docs/architecture_decisions/0010-governed-asr-phonetic-recovery.md) 與 [ADR-0011](docs/architecture_decisions/0011-versioned-asr-vocabulary.md)。
 
 知識治理中心使用 PostgreSQL 保存治理狀態。先啟動資料庫、升級 schema 並匯入初始草稿：
 
@@ -113,9 +113,11 @@ SVA_TTS_MODEL=mlx-community/Qwen3-TTS-12Hz-0.6B-Base-6bit
 SVA_TTS_VOICE=Vivian
 SVA_TTS_REF_AUDIO=<宿主機上的授權參考音檔絕對路徑>
 SVA_TTS_REF_TEXT=<參考音檔逐字稿>
+SVA_BARGE_IN_ENABLED=true
+SVA_BARGE_IN_DEFAULT_MODE=standard
 ```
 
-`SVA_ASR_MODEL` 是預設模型，目前依 Web Pilot 實測採用 `Qwen3-ASR-1.7B-8bit`；`SVA_ASR_CANDIDATE_MODEL` 保留 Whisper 作為 A/B 對照與備援。設定候選模型後，Web Pilot 會顯示 A/B 選單，停止語音工作階段時可在兩個受控模型間切換。`SVA_TTS_REF_AUDIO` 與 `SVA_TTS_REF_TEXT` 必須同時設定，且只能保存在被 Git 忽略的 `.env`。MLX Audio 執行於宿主機，因此收到的是宿主機絕對路徑，不需將參考音檔掛載進 orchestrator 容器。瀏覽器只直連 MLX Audio 的即時 ASR WebSocket；LLM API key、意圖路由、知識檢索及 TTS 呼叫都留在後端。`POST /v1/voice/respond-stream` 不接受任意朗讀文字，只接受 ASR 逐字稿，並強制先執行與文字問答相同的政策及知識流程。TTS 仍透過 MLX Audio API，回答依 `，。？、` 與換行優先在 80 字附近分段，找不到合適切點時才於 96 字硬切。一般 log 不保存音訊、逐字稿、參考素材或答案全文，只記 TTS 模型、分段／音訊片段數與延遲。詳見 [ADR-0006](docs/architecture_decisions/0006-realtime-voice-pilot.md)。
+`SVA_ASR_MODEL` 是預設模型，目前依 Web Pilot 實測採用 `Qwen3-ASR-1.7B-8bit`；`SVA_ASR_CANDIDATE_MODEL` 保留 Whisper 作為 A/B 對照與備援。設定候選模型後，Web Pilot 會顯示 A/B 選單，停止語音工作階段時可在兩個受控模型間切換。Barge-in 預設以 AudioWorklet 在瀏覽器持續監聽：本機音量門檻先降低 TTS 音量，MLX Audio WebRTC VAD 確認為新的人聲後才中斷播放並保留 ASR pre-roll。`SVA_BARGE_IN_DEFAULT_MODE` 可設為 `sensitive`、`standard` 或 `resistant`，Web Pilot 也能在語音工作階段開始前切換。`SVA_TTS_REF_AUDIO` 與 `SVA_TTS_REF_TEXT` 必須同時設定，且只能保存在被 Git 忽略的 `.env`。MLX Audio 執行於宿主機，因此收到的是宿主機絕對路徑，不需將參考音檔掛載進 orchestrator 容器。瀏覽器只直連 MLX Audio 的即時 ASR WebSocket；LLM API key、意圖路由、知識檢索及 TTS 呼叫都留在後端。`POST /v1/voice/respond-stream` 不接受任意朗讀文字，只接受 ASR 逐字稿，並強制先執行與文字問答相同的政策及知識流程。TTS 仍透過 MLX Audio API，回答依 `，。？、` 與換行優先在 80 字附近分段，找不到合適切點時才於 96 字硬切。一般 log 不保存音訊、逐字稿、參考素材或答案全文，只記 TTS 模型、分段／音訊片段數、播放延遲、插話模式及觸發時間。詳見 [ADR-0006](docs/architecture_decisions/0006-realtime-voice-pilot.md)。
 
 Demo 前的預熱、允許／拒答案例、插話中斷與人工口音驗收步驟，請依 [即時語音 Web Pilot Demo 清單](docs/demo/voice-pilot-checklist.md) 執行。
 

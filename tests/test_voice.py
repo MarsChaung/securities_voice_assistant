@@ -242,6 +242,13 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     ]
     assert config.json()["models"]["voice_clone"] is True
     assert config.json()["asr_context"] == ""
+    assert config.json()["barge_in"]["enabled"] is True
+    assert config.json()["barge_in"]["default_mode"] == "standard"
+    assert [preset["id"] for preset in config.json()["barge_in"]["presets"]] == [
+        "sensitive",
+        "standard",
+        "resistant",
+    ]
     assert "reference.wav" not in config.text
     assert "合成參考逐字稿" not in config.text
     assert events[0]["type"] == "turn"
@@ -326,6 +333,11 @@ def test_voice_playback_metrics_endpoint_logs_metadata_and_rejects_content() -> 
         "underrun_total_ms": 0,
         "underrun_max_ms": 0,
         "interrupted": False,
+        "interruption_reason": None,
+        "barge_in_mode": None,
+        "barge_in_duck_latency_ms": None,
+        "barge_in_confirm_latency_ms": None,
+        "barge_in_false_trigger_count": 0,
         "chunk_timings": [
             {
                 "arrival_offset_ms": 300,

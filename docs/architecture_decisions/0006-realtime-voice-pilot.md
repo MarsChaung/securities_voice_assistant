@@ -17,11 +17,13 @@
 
 ## 互動方式
 
-麥克風按鈕開啟連續語音模式；每輪播放完成後才重新聆聽，避免助理自己的聲音觸發 ASR。播放期間再次按下按鈕會中止 HTTP 串流與已排程音訊，立即回到聆聽狀態。文字輸入介面與來源引用、決策資訊及二元回饋維持不變。
+麥克風按鈕開啟連續語音模式。播放期間以 `echoCancellation=true`、`noiseSuppression=true`、`autoGainControl=false` 持續收音，避免放大遠距人聲。AudioWorklet 依環境底噪與受控模式門檻進行第一階段偵測：持續音量達門檻時先降低播放音量並送出 pre-roll；MLX Audio WebRTC VAD 回報新的人聲起點、且持續時間達確認門檻後，瀏覽器立即停止本機播放並非同步取消 TTS HTTP 串流，再沿用同一 ASR turn 接收使用者後續語音。短促聲音未通過確認時會取消 ASR 候選並恢復播放。播放期間再次按下麥克風仍保留為手動中斷備援。
+
+插話模式為 `sensitive`、`standard`、`resistant` 三組受控 preset，預設由 `SVA_BARGE_IN_DEFAULT_MODE` 決定，工作階段開始前可於 Web Pilot 切換。瀏覽器不提供任意數值輸入，避免未經校準的參數進入正式服務。
 
 ## 資料與稽核
 
-原始音訊只在瀏覽器與 MLX Audio 記憶體串流處理，orchestrator 不接收或保存音訊。ASR 逐字稿只存在該 turn 的瀏覽器與 orchestrator 記憶體，不寫入一般 log。`voice_synthesis` 稽核事件只記 Turn ID、TTS 模型、句子／音訊片段數、首段與完整延遲及固定錯誤類型，不記逐字稿、回答或音訊。
+原始音訊只在瀏覽器與 MLX Audio 記憶體串流處理，orchestrator 不接收或保存音訊。ASR 逐字稿只存在該 turn 的瀏覽器與 orchestrator 記憶體，不寫入一般 log。`voice_synthesis` 稽核事件只記 Turn ID、TTS 模型、句子／音訊片段數、首段與完整延遲及固定錯誤類型；`voice_playback` 另記插話模式、duck／confirm 延遲與誤觸次數。兩者都不記逐字稿、回答或音訊。
 
 ## 部署邊界
 
@@ -33,5 +35,6 @@ PostgreSQL、orchestrator 與知識治理中心由本專案 Compose 管理；oML
 
 - 即時 ASR 無法連線時目前顯示錯誤，不自動上傳 WebM 作批次辨識。
 - 首次載入 ASR／TTS 模型可能明顯較慢，Demo 前應先預熱。
-- 播放期間的插話採明確按鈕中斷；尚未啟用常駐麥克風與回音消除後的自動 barge-in。
+- WebRTC VAD 能確認人聲但不能確認是否為客戶本人；旁人與客戶音量接近時仍可能誤觸，須以三種模式、耳麥或後續背景人聲消除方案降低風險。
+- 目前不內嵌 Silero／ONNX Runtime，避免在無前端打包流程下新增約 13 MB 二進位供應鏈；若正式場域評測顯示 WebRTC VAD 不足，再以相同 detector 介面替換確認層。
 - 正式環境仍須完成語音模型版本鎖定、依賴與源碼掃描、瀏覽器相容性、噪音／ASR 誤字紅隊及公司資料留存核准。

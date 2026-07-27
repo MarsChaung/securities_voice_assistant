@@ -35,6 +35,7 @@ from .intent_routing import OpenAICompatibleIntentRouter
 from .service import TurnService
 from .shadow import ThreadedShadowAnswerRunner
 from .voice import (
+    BARGE_IN_PRESETS,
     VoicePlaybackMetrics,
     VoiceReplyRequest,
     VoiceService,
@@ -43,6 +44,7 @@ from .voice import (
 )
 
 _PACKAGE_ROOT = Path(__file__).parent
+_PILOT_ASSET_VERSION = "20260727.4"
 
 
 def _build_knowledge_retriever(
@@ -205,7 +207,10 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="pilot.html",
-            context={"knowledge_admin_url": str(resolved_settings.knowledge_admin_url)},
+            context={
+                "knowledge_admin_url": str(resolved_settings.knowledge_admin_url),
+                "pilot_asset_version": _PILOT_ASSET_VERSION,
+            },
         )
 
     @app.get("/healthz")
@@ -264,6 +269,11 @@ def create_app(
                 },
                 "asr_models": asr_models,
                 "asr_context": resolved_service.voice_asr_context(),
+                "barge_in": {
+                    "enabled": resolved_settings.barge_in_enabled,
+                    "default_mode": resolved_settings.barge_in_default_mode,
+                    "presets": BARGE_IN_PRESETS,
+                },
             }
         )
 

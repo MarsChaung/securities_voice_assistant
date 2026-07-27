@@ -184,9 +184,9 @@ textarea::placeholder { color: #98a59f; }
 @keyframes voice-pulse { 50% { box-shadow: 0 0 0 7px rgb(146 60 60 / 10%); } }
 .composer-meta { margin-top: 7px; display: flex; justify-content: space-between; align-items: center; gap: 12px; color: #89968f; font-size: 9px; }
 .composer-status { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.asr-model-control { display: inline-flex; align-items: center; gap: 5px; color: #64736d; font-weight: 700; }
-.asr-model-control select { max-width: 230px; padding: 3px 22px 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: white; color: #53635d; font: inherit; }
-.asr-model-control select:disabled { opacity: .55; }
+.asr-model-control, .barge-in-control { display: inline-flex; align-items: center; gap: 5px; color: #64736d; font-weight: 700; }
+.asr-model-control select, .barge-in-control select { max-width: 230px; padding: 3px 22px 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: white; color: #53635d; font: inherit; }
+.asr-model-control select:disabled, .barge-in-control select:disabled { opacity: .55; }
 
 @media (max-width: 900px) {
   .workspace { grid-template-columns: 1fr; }
@@ -208,7 +208,7 @@ textarea::placeholder { color: #98a59f; }
   .composer { padding-inline: 12px; }
   .composer-meta { align-items: flex-start; }
   .composer-status { align-items: flex-start; flex-direction: column; gap: 5px; }
-  .asr-model-control select { max-width: 170px; }
+  .asr-model-control select, .barge-in-control select { max-width: 170px; }
   .input-frame button span:first-child { display: none; }
   .user-message .message-content { max-width: 88%; }
 }

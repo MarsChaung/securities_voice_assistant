@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     tts_ref_audio: str | None = None
     tts_ref_text: SecretStr | None = None
     voice_timeout_seconds: float = Field(default=180.0, gt=0)
+    barge_in_enabled: bool = True
+    barge_in_default_mode: Literal["sensitive", "standard", "resistant"] = "standard"
 
     @model_validator(mode="after")
     def require_embedding_model_for_hybrid_mode(self) -> "Settings":

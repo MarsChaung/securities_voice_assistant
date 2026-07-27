@@ -135,6 +135,11 @@ def test_voice_playback_event_contains_only_timing_metadata(
             underrun_total_ms=42.6789,
             underrun_max_ms=42.6789,
             interrupted=False,
+            interruption_reason=None,
+            barge_in_mode=None,
+            barge_in_duck_latency_ms=None,
+            barge_in_confirm_latency_ms=None,
+            barge_in_false_trigger_count=0,
             chunk_timings=[
                 {
                     "arrival_offset_ms": 300.1234,
@@ -166,9 +171,14 @@ def test_voice_playback_event_contains_only_timing_metadata(
         "underrun_total_ms",
         "underrun_max_ms",
         "interrupted",
+        "interruption_reason",
+        "barge_in_mode",
+        "barge_in_duck_latency_ms",
+        "barge_in_confirm_latency_ms",
+        "barge_in_false_trigger_count",
         "chunk_timings",
     }
-    assert event["schema_version"] == "1.0"
+    assert event["schema_version"] == "1.1"
     assert event["underrun_total_ms"] == 42.679
     assert event["chunk_timings"][1]["gap_before_ms"] == 42.679
     assert private_content not in caplog.text

@@ -1,13 +1,14 @@
 <!doctype html>
-<html lang="zh-Hant-TW">
+<html lang="zh-Hant-TW" data-asset-version="{{ pilot_asset_version }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>證券知識助手｜內部 Web Pilot</title>
-    <link rel="stylesheet" href="{{ url_for('pilot-static', path='/pilot.css') }}">
-    <script defer src="{{ url_for('pilot-static', path='/voice-playback.js') }}"></script>
-    <script defer src="{{ url_for('pilot-static', path='/pilot.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('pilot-static', path='/pilot.css') }}?v={{ pilot_asset_version }}">
+    <script defer src="{{ url_for('pilot-static', path='/voice-playback.js') }}?v={{ pilot_asset_version }}"></script>
+    <script defer src="{{ url_for('pilot-static', path='/voice-barge-in.js') }}?v={{ pilot_asset_version }}"></script>
+    <script defer src="{{ url_for('pilot-static', path='/pilot.js') }}?v={{ pilot_asset_version }}"></script>
   </head>
   <body>
     <header class="topbar">
@@ -116,6 +117,10 @@
               <label class="asr-model-control" id="asr-model-control" for="asr-model" hidden>
                 ASR
                 <select id="asr-model" aria-label="語音辨識 A/B 模型"></select>
+              </label>
+              <label class="barge-in-control" id="barge-in-control" for="barge-in-mode" hidden>
+                插話
+                <select id="barge-in-mode" aria-label="語音插話靈敏度"></select>
               </label>
             </div>
             <span><output id="character-count">0</output> / 4000</span>
