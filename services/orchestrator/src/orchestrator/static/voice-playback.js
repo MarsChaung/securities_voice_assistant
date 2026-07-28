@@ -49,6 +49,7 @@
       this.crossfadeSeconds = crossfadeSeconds;
       this.minimumLeadSeconds = minimumLeadSeconds;
       this.now = now;
+      this.setTimer = setTimer;
       this.clearTimer = clearTimer;
       this.createdAtMs = now();
       this.contextStartedAt = audioContext.currentTime;
@@ -67,6 +68,7 @@
       this.initialBufferedMs = 0;
       this.firstPlaybackDelayMs = null;
       this.initialWaitExpired = false;
+      this.startTimers = new Set();
       this.initialWaitTimer = setTimer(() => {
         this.initialWaitTimer = null;
         this.initialWaitExpired = true;
@@ -74,7 +76,7 @@
       }, MAXIMUM_INITIAL_WAIT_SECONDS * 1000);
     }
 
-    enqueue(audioBuffer, { arrivalTimeMs = this.now() } = {}) {
+    enqueue(audioBuffer, { arrivalTimeMs = this.now(), onStart = null } = {}) {
       if (!audioBuffer || !(audioBuffer.duration > 0)) return;
       const timing = {
         arrival_offset_ms: Math.max(0, arrivalTimeMs - this.createdAtMs),
@@ -85,7 +87,7 @@
       this.chunkTimings.push(timing);
 
       if (!this.started) {
-        this.queue.push({ audioBuffer, timing });
+        this.queue.push({ audioBuffer, timing, onStart });
         this.queuedDuration += audioBuffer.duration;
         if (
           this.initialWaitExpired ||
@@ -95,7 +97,7 @@
         }
         return;
       }
-      this._schedule(audioBuffer, timing);
+      this._schedule(audioBuffer, timing, onStart);
     }
 
     async finish() {
@@ -128,6 +130,8 @@
         } catch {}
       }
       this.activeSources.clear();
+      for (const timer of this.startTimers) this.clearTimer(timer);
+      this.startTimers.clear();
     }
 
     metrics() {
@@ -176,8 +180,8 @@
       const queued = this.queue;
       this.queue = [];
       this.queuedDuration = 0;
-      for (const { audioBuffer, timing } of queued) {
-        this._schedule(audioBuffer, timing);
+      for (const { audioBuffer, timing, onStart } of queued) {
+        this._schedule(audioBuffer, timing, onStart);
       }
     }
 
@@ -187,7 +191,7 @@
       this.initialWaitTimer = null;
     }
 
-    _schedule(audioBuffer, timing) {
+    _schedule(audioBuffer, timing, onStart = null) {
       const now = this.audioContext.currentTime;
       const earliestStart = now + this.minimumLeadSeconds;
       let startAt = earliestStart;
@@ -235,6 +239,14 @@
       });
       this.activeSources.add(source);
       source.start(startAt);
+      if (onStart) {
+        const delayMs = Math.max(0, (startAt - this.audioContext.currentTime) * 1000);
+        const timer = this.setTimer(() => {
+          this.startTimers.delete(timer);
+          if (!this.interrupted) onStart();
+        }, delayMs);
+        this.startTimers.add(timer);
+      }
       this.previousEndAt = endAt;
     }
   }

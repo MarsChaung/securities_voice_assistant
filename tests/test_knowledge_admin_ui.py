@@ -105,6 +105,8 @@ def test_knowledge_list_contains_drafts(
     assert response.status_code == 200
     assert "知識治理中心" in response.text
     assert "本機開發模式" in response.text
+    assert "語音客服測試" in response.text
+    assert 'href="http://127.0.0.1:8080/voice-test"' in response.text
     assert "台股定期定額的基本概念" in response.text
     assert "複審到期時間" in response.text
     assert "<strong>15</strong><span>筆</span>" in response.text
@@ -153,6 +155,29 @@ def test_knowledge_detail_preserves_source_and_restrictions(
     assert "複審到期時間" in response.text
     assert "問句變體" in response.text
     assert "儲存問句變體" in response.text
+
+
+def test_readonly_standard_answer_style_preserves_line_breaks(
+    knowledge_store: DatabaseKnowledgeRepository,
+) -> None:
+    client = make_client(knowledge_store)
+    submitted = client.post(
+        "/admin/knowledge/K-CATHAY-DCA-001/actions/submit_review",
+        data={"actor_id": "Codex-assisted draft import", "expected_version": "1"},
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+    detail = client.get(submitted.headers["location"])
+    stylesheet = client.get("/static/admin.css")
+    answer_rule = next(
+        rule for rule in stylesheet.text.split("}") if ".answer {" in rule
+    )
+
+    assert submitted.status_code == 303
+    assert detail.status_code == 200
+    assert stylesheet.status_code == 200
+    assert '<p class="answer">' in detail.text
+    assert "white-space: pre-wrap" in answer_rule
 
 
 def test_draft_question_variants_can_be_managed_from_ui(
@@ -282,6 +307,7 @@ def test_overdue_published_item_can_start_revision_from_ui(
     assert "台股定期定額的基本概念" in expired_filter.text
     assert "複審到期時間" in detail.text
     assert "status-expired" in detail.text
+    assert '<p class="answer">' in detail.text
     assert "資料庫狀態" in detail.text
     assert "Runtime 狀態" in detail.text
     assert "不可用" in detail.text

@@ -225,6 +225,31 @@ test("flushes a short response when the stream ends", async () => {
   assert.equal(metrics.chunk_count, 1);
 });
 
+test("reveals a subtitle callback when its audio is scheduled to start", async () => {
+  const context = new FakeAudioContext();
+  const timers = [];
+  const revealed = [];
+  const scheduler = new VoicePlaybackScheduler({
+    audioContext: context,
+    destination: context.destination,
+    activeSources: new Set(),
+    setTimer: (callback) => {
+      timers.push(callback);
+      return timers.length;
+    },
+    clearTimer: () => {},
+  });
+
+  scheduler.enqueue(
+    { duration: 1.2 },
+    { onStart: () => revealed.push("第一段字幕") },
+  );
+  await scheduler.finish();
+  timers[1]();
+
+  assert.deepEqual(revealed, ["第一段字幕"]);
+});
+
 test("ducks, restores, and records governed barge-in metrics", () => {
   const context = new FakeAudioContext();
   const scheduler = new VoicePlaybackScheduler({

@@ -252,10 +252,69 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert "reference.wav" not in config.text
     assert "合成參考逐字稿" not in config.text
     assert events[0]["type"] == "turn"
+    assert events[0]["speech_segments"] == [turn["result"]["answer"]]
     assert turn["result"]["decision"] == "refuse"
     assert turn["result"]["policy_rule_id"] == "KNO-001"
     assert events[1]["type"] == "audio"
     assert events[-1]["type"] == "done"
+
+
+def test_development_voice_test_can_stream_an_unsaved_greeting() -> None:
+    frame = make_wav_frame()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=frame)
+
+    greeting = "您好，我是 AI 語音客服。請問今天想了解什麼呢？"
+    voice = voice_service(httpx.MockTransport(handler))
+    settings = Settings(
+        app_env="development",
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(service=TurnService(), settings=settings, voice_service=voice)
+    ) as client:
+        response = client.post(
+            "/v1/voice/test-greeting-stream",
+            json={"greeting": greeting},
+        )
+
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert response.status_code == 200
+    assert events[0] == {"type": "greeting", "speech_segments": [greeting]}
+    assert events[1]["type"] == "audio"
+    assert events[-1]["type"] == "done"
+
+
+def test_voice_test_greeting_is_not_available_outside_development() -> None:
+    voice = voice_service(httpx.MockTransport(lambda _: httpx.Response(200)))
+    settings = Settings(
+        app_env="staging",
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(service=TurnService(), settings=settings, voice_service=voice)
+    ) as client:
+        response = client.post(
+            "/v1/voice/test-greeting-stream",
+            json={"greeting": "測試招呼語"},
+        )
+
+    assert response.status_code == 404
 
 
 def test_voice_endpoint_applies_phonetic_recovery_before_tts() -> None:

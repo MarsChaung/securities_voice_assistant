@@ -59,6 +59,10 @@ uv run uvicorn knowledge_admin.api:app --host 127.0.0.1 --reload --port 8081
 
 Shadow 複核工作台：<http://127.0.0.1:8081/admin/shadow>
 
+語音客服測試：<http://127.0.0.1:8080/voice-test>。可調整 ASR 模型、插話靈敏度與
+本機招呼語，並檢視 Runtime、ASR、TTS 與即時辨識狀態；AI 回答字幕會依語音實際起播
+時點分段顯示。自訂招呼語 TTS 端點只在 `development` 開放，內容不會保存。
+
 介面可用開發身分模擬器操作 4 個官方來源與 15 筆知識草稿，編輯標準答案與問句變體，並執行送審、完成審核、核准、發布、退回及撤銷。模擬身分只允許在 development 使用；正式 SSO/RBAC 仍留待公司環境整合。
 
 `published` 且已生效、未過期、未超過複審到期時間的知識會立即成為 orchestrator 候選資料；撤銷後不再進入 Runtime。已超過複審到期時間的發布項目可由原作者建立下一版草稿，系統會先保存不可變的舊發布版快照，再重新執行送審、核准與發布。

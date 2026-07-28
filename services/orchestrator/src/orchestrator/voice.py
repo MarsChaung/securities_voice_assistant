@@ -133,6 +133,12 @@ class VoiceReplyRequest(BaseModel):
     transcript: str = Field(min_length=1, max_length=4_000)
 
 
+class VoiceGreetingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    greeting: str = Field(min_length=1, max_length=300)
+
+
 class VoicePlaybackChunkMetric(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

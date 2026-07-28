@@ -195,6 +195,22 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
     assert "localStorage" not in script.text
 
 
+def test_voice_customer_service_test_page_is_served() -> None:
+    client = make_client()
+
+    page = client.get("/voice-test")
+    stylesheet = client.get("/pilot/static/voice-test.css")
+
+    assert page.status_code == 200
+    assert 'data-voice-test="true"' in page.text
+    assert 'id="voice-button"' in page.text
+    assert 'id="hangup-button"' in page.text
+    assert 'id="greeting"' in page.text
+    assert "ASR 即時辨識" in page.text
+    assert "依語音播放分段顯示" in page.text
+    assert stylesheet.status_code == 200
+
+
 def test_feedback_endpoint_logs_only_allowlisted_metadata(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

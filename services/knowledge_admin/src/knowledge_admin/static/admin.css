@@ -115,7 +115,7 @@ code { color: #6f7d78; font-size: 12px; }
 .asr-term-list span { color: var(--muted); font-size: 13px; }
 .answer-panel { border-top: 3px solid var(--green); }
 .generated-panel { border-top: 3px solid #3867b4; }
-.answer { margin: 0; font-size: 19px; line-height: 1.8; }
+.answer { margin: 0; font-size: 19px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
 .empty-answer { margin: 0; padding: 24px; border-radius: 10px; background: #f2f4f3; color: var(--muted); text-align: center; }
 .shadow-comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; align-items: stretch; }
 .shadow-comparison .panel { min-width: 0; }

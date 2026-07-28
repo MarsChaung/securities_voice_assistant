@@ -3,7 +3,10 @@ const assert = require("node:assert/strict");
 
 const {
   BargeInDetector,
+  hasMeaningfulTranscript,
+  isLikelyContextEcho,
   isNonActionableUtterance,
+  sanitizeAsrTranscript,
 } = require("../../services/orchestrator/src/orchestrator/static/voice-barge-in.js");
 
 const preset = {
@@ -33,6 +36,35 @@ test("recognises non-actionable turns without hiding a real follow-up question",
   assert.equal(isNonActionableUtterance("嗯，我想問線上開戶資格"), false);
   assert.equal(isNonActionableUtterance("我知道了，那要如何補件？"), false);
   assert.equal(isNonActionableUtterance("好，請說明假除權息"), false);
+});
+
+test("sanitises invalid ASR output and rejects context echo", () => {
+  const context = [
+    "假除權息",
+    "台股定期定額",
+    "台股定期定額約定日遇休市",
+    "美股定期投資的兩種方式",
+    "美股定期投資",
+    "國泰證券 App 設定台股定期定額",
+  ].join("、");
+  const echo = [
+    "假除權息",
+    "臺股定期定額",
+    "臺股定期定額約定日遇休市",
+    "美股定期投資的兩種方式",
+    "美股定期投資",
+    "國泰證券 App ���定臺股定期定額",
+  ].join("、");
+
+  assert.equal(sanitizeAsrTranscript("��。"), "。");
+  assert.equal(hasMeaningfulTranscript("。！？"), false);
+  assert.equal(hasMeaningfulTranscript("什麼是假除權息？"), true);
+  assert.equal(isLikelyContextEcho(echo, context), true);
+  assert.equal(isLikelyContextEcho("什麼是假除權息？", context), false);
+  assert.equal(
+    isLikelyContextEcho("假除權息和台股定期定額有什麼差別？", context),
+    false,
+  );
 });
 
 test("ducks early and confirms only after server VAD confirms speech", () => {

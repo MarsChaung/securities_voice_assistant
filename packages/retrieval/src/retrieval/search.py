@@ -37,9 +37,11 @@ _CANONICAL_REPLACEMENTS = (
     ("甚麼", "什麼"),
     ("賬戶", "帳戶"),
     ("帳號", "帳戶"),
+    ("臺", "台"),
 )
 _DOMAIN_TERMS = ("定期定額", "股息再投資", "交割帳戶", "美股", "台股")
 _PLATFORM_TERMS = ("國泰證券app", "樹精靈app", "樹精靈", "web", "網頁版")
+_CONTACT_PHONE_DOCUMENT_TERMS = ("電話", "專線", "市話", "請撥")
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ class LexicalKnowledgeRetriever:
             for document in documents
             if _matches_intent(document, intent)
             and _matches_platform(document, target_platform)
+            and _matches_query_constraints(query, document)
         ]
         return tuple(
             sorted(
@@ -183,6 +186,47 @@ def _matches_platform(document: KnowledgeDocument, target_platform: str | None) 
     if target_platform == "app":
         return bool({"ios", "android"} & platforms)
     return False
+
+
+def _matches_query_constraints(query: str, document: KnowledgeDocument) -> bool:
+    normalized_query = _normalize(query)
+    asks_for_contact_phone = (
+        "專線" in normalized_query
+        or "電話號碼" in normalized_query
+        or any(
+            phrase in normalized_query
+            for phrase in (
+                "接單中心電話",
+                "接單電話",
+                "客服電話",
+                "聯絡電話",
+            )
+        )
+        or (
+            "電話" in normalized_query
+            and any(
+                phrase in normalized_query
+                for phrase in ("電話是多少", "電話是什麼", "電話幾號", "電話哪支")
+            )
+        )
+    )
+    if not asks_for_contact_phone:
+        return True
+
+    searchable_text = _normalize(
+        "\n".join(
+            (
+                document.item.title,
+                document.item.standard_answer,
+                *(
+                    variant.question_text
+                    for variant in document.item.question_variants
+                    if variant.usage is QuestionVariantUsage.RETRIEVAL
+                ),
+            )
+        )
+    )
+    return any(term in searchable_text for term in _CONTACT_PHONE_DOCUMENT_TERMS)
 
 
 def _normalize_query(value: str) -> str:

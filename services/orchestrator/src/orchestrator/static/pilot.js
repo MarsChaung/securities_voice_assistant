@@ -13,6 +13,19 @@ const asrModelSelect = document.querySelector("#asr-model");
 const bargeInControl = document.querySelector("#barge-in-control");
 const bargeInModeSelect = document.querySelector("#barge-in-mode");
 const initialMessage = messages.firstElementChild.cloneNode(true);
+const voiceTestMode = document.documentElement.dataset.voiceTest === "true";
+const hangupButton = document.querySelector("#hangup-button");
+const greetingInput = document.querySelector("#greeting");
+const callState = document.querySelector("#call-state");
+const callStateText = document.querySelector("#call-state-text");
+const callDuration = document.querySelector("#call-duration");
+const runtimeStatus = document.querySelector("#runtime-status");
+const voiceServiceStatus = document.querySelector("#voice-service-status");
+const asrStatus = document.querySelector("#asr-status");
+const ttsStatus = document.querySelector("#tts-status");
+const knowledgeCount = document.querySelector("#knowledge-count");
+const phaseStatus = document.querySelector("#phase-status");
+const asrLiveText = document.querySelector("#asr-live-text");
 const voiceState = {
   config: null,
   stream: null,
@@ -36,6 +49,9 @@ const voiceState = {
   bargeInStreaming: false,
   preRollFrames: [],
   preRollSamples: 0,
+  subtitleNodes: [],
+  callStartedAt: null,
+  callTimer: null,
 };
 
 function selectedAsrModel() {
@@ -88,7 +104,12 @@ function scrollToLatest() {
   messages.scrollTop = messages.scrollHeight;
 }
 
+function removeConversationEmptyState() {
+  messages.querySelector(".conversation-empty")?.remove();
+}
+
 function appendUserMessage(text) {
+  removeConversationEmptyState();
   const article = element("article", "message user-message");
   const content = element("div", "message-content");
   content.append(element("p", "message-label", "你"));
@@ -173,21 +194,39 @@ function feedbackPanel(turnId) {
   return panel;
 }
 
-function appendAssistantMessage(turn, allowFeedback = true) {
+function appendAssistantMessage(
+  turn,
+  allowFeedback = true,
+  { progressiveSegments = [], label = "知識助手", showDecision = true } = {},
+) {
+  removeConversationEmptyState();
   const result = turn.result;
   const article = element("article", `message assistant-message ${result.decision}`);
   article.append(element("div", "avatar", "知"));
   const content = element("div", "message-content");
-  content.append(element("p", "message-label", "知識助手"));
-  content.append(
-    element(
-      "div",
-      `decision-badge decision-${result.decision}`,
-      decisionLabels[result.decision] || "系統回覆",
-    ),
-  );
+  content.append(element("p", "message-label", label));
+  if (showDecision) {
+    content.append(
+      element(
+        "div",
+        `decision-badge decision-${result.decision}`,
+        decisionLabels[result.decision] || "系統回覆",
+      ),
+    );
+  }
   const copy = element("div", "answer-copy");
-  copy.append(element("p", "", result.answer));
+  const answer = element("p");
+  if (progressiveSegments.length) {
+    voiceState.subtitleNodes = progressiveSegments.map((segment) => {
+      const node = element("span", "subtitle-segment", segment);
+      answer.append(node);
+      return node;
+    });
+  } else {
+    answer.textContent = result.answer;
+    voiceState.subtitleNodes = [];
+  }
+  copy.append(answer);
   content.append(copy);
 
   const references = (result.citations || []).map(safeSourceReference).filter(Boolean);
@@ -197,20 +236,34 @@ function appendAssistantMessage(turn, allowFeedback = true) {
     content.append(sources);
   }
 
-  const details = element("details", "decision-details");
-  details.append(element("summary", "", "查看決策資訊"));
-  details.append(
-    element(
-      "p",
-      "",
-      `規則 ${result.policy_rule_id} · 意圖 ${result.intent} · 信心 ${Math.round(result.confidence * 100)}%`,
-    ),
-  );
-  content.append(details);
+  if (showDecision) {
+    const details = element("details", "decision-details");
+    details.append(element("summary", "", "查看決策資訊"));
+    details.append(
+      element(
+        "p",
+        "",
+        `規則 ${result.policy_rule_id} · 意圖 ${result.intent} · 信心 ${Math.round(result.confidence * 100)}%`,
+      ),
+    );
+    content.append(details);
+  }
   if (allowFeedback) content.append(feedbackPanel(turn.turn_id));
   article.append(content);
   messages.append(article);
   scrollToLatest();
+  return article;
+}
+
+function revealVoiceSubtitle(sentenceIndex, nodes = voiceState.subtitleNodes) {
+  const node = nodes[sentenceIndex - 1];
+  if (!node || node.classList.contains("visible")) return;
+  node.classList.add("visible");
+  scrollToLatest();
+}
+
+function revealAllVoiceSubtitles(nodes = voiceState.subtitleNodes) {
+  for (const node of nodes) node.classList.add("visible");
 }
 
 function appendNetworkError() {
@@ -238,21 +291,74 @@ async function loadSystemState() {
     if (!response.ok || health.knowledge_database === "unavailable") {
       systemState.className = "system-state error";
       systemStateText.textContent = "知識服務無法連線";
+      setStatusValue(runtimeStatus, "error", "Runtime 無法連線");
     } else if (count === 0) {
       systemState.className = "system-state warning";
       systemStateText.textContent = "0 筆可回答知識｜請檢查生效與複審到期時間";
+      setStatusValue(runtimeStatus, "warning", "Runtime 已連線");
     } else {
       systemState.className = "system-state ready";
       systemStateText.textContent = `${count} 筆知識可回答`;
+      setStatusValue(runtimeStatus, "ready", "Runtime 正常");
     }
+    if (knowledgeCount) knowledgeCount.textContent = `${count} 筆`;
   } catch {
     systemState.className = "system-state error";
     systemStateText.textContent = "無法取得系統狀態";
+    setStatusValue(runtimeStatus, "error", "無法取得狀態");
   }
+}
+
+function setStatusValue(target, state, text) {
+  if (!target) return;
+  const dot = element("span", `status-dot ${state}`);
+  target.replaceChildren(dot, document.createTextNode(text));
 }
 
 function setVoiceStatus(text) {
   voiceStatus.textContent = text;
+  if (phaseStatus) phaseStatus.textContent = text;
+}
+
+function setAsrLive(text) {
+  if (asrLiveText) asrLiveText.textContent = text;
+}
+
+function formatCallDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function startCallClock() {
+  if (!voiceTestMode || voiceState.callTimer) return;
+  voiceState.callStartedAt = Date.now();
+  callDuration.textContent = "00:00";
+  voiceState.callTimer = setInterval(() => {
+    callDuration.textContent = formatCallDuration(Date.now() - voiceState.callStartedAt);
+  }, 1000);
+}
+
+function stopCallClock() {
+  if (voiceState.callTimer) clearInterval(voiceState.callTimer);
+  voiceState.callTimer = null;
+}
+
+function updateCallControls(state) {
+  if (!voiceTestMode) return;
+  const active = state !== "idle";
+  voiceButton.disabled = active;
+  hangupButton.disabled = !active;
+  greetingInput.disabled = active;
+  callState.dataset.state = state;
+  callStateText.textContent = {
+    idle: "通話已結束",
+    connecting: "撥號中",
+    active: "通話中",
+    speaking: "AI 客服說話中",
+  }[state] || "通話中";
+  if (!active) stopCallClock();
 }
 
 function downsampleToInt16(inputSamples, sourceRate, targetRate = 16000) {
@@ -470,18 +576,24 @@ function handleRealtimeAsrEvent(data) {
     return;
   }
   if (data.type === "delta") {
-    voiceState.partialTranscript += data.delta || "";
+    voiceState.partialTranscript += VoiceBargeIn.sanitizeAsrTranscript(data.delta);
     const partial = voiceState.partialTranscript.trim();
-    if (partial) setVoiceStatus(`辨識中：${partial.slice(-36)}`);
+    if (partial) {
+      setVoiceStatus(`辨識中：${partial.slice(-36)}`);
+      setAsrLive(partial);
+    }
     return;
   }
   if (data.text && data.is_partial) {
-    voiceState.partialTranscript = data.text.trim();
+    voiceState.partialTranscript = VoiceBargeIn.sanitizeAsrTranscript(data.text).trim();
     setVoiceStatus(`辨識中：${voiceState.partialTranscript.slice(-36)}`);
+    setAsrLive(voiceState.partialTranscript);
     return;
   }
   if (data.type === "candidate_end") {
-    voiceState.partialTranscript = (data.text || voiceState.partialTranscript).trim();
+    voiceState.partialTranscript = VoiceBargeIn.sanitizeAsrTranscript(
+      data.text || voiceState.partialTranscript,
+    ).trim();
     setVoiceStatus(
       data.semantic_complete ? "正在確認你是否說完…" : "句子似乎還沒說完，持續聆聽中…",
     );
@@ -500,13 +612,29 @@ function handleRealtimeAsrEvent(data) {
   if (data.type === "noise_rejected") {
     voiceState.partialTranscript = "";
     setVoiceStatus("已忽略短暫環境音，持續聆聽中…");
+    setAsrLive("已忽略短暫環境音，等待有效語音…");
     return;
   }
   if (data.type === "utterance_end" && voiceState.listening) {
     voiceState.listening = false;
     stopRealtimeCapture();
     voiceButton.classList.remove("listening");
-    const transcript = (data.text || voiceState.partialTranscript).trim();
+    const transcript = VoiceBargeIn.sanitizeAsrTranscript(
+      data.text || voiceState.partialTranscript,
+    ).trim();
+    setAsrLive(transcript || "沒有辨識到有效語音。");
+    if (
+      !VoiceBargeIn.hasMeaningfulTranscript(transcript)
+      || VoiceBargeIn.isLikelyContextEcho(
+        transcript,
+        voiceState.config?.asr_context || "",
+      )
+    ) {
+      voiceState.partialTranscript = "";
+      setVoiceStatus("已忽略無效辨識或環境雜音，持續聆聽中…");
+      if (voiceState.continuous) void startVoiceListening();
+      return;
+    }
     if (VoiceBargeIn.isNonActionableUtterance(transcript)) {
       voiceState.partialTranscript = "";
       setVoiceStatus("聽到了，請繼續說你的問題…");
@@ -564,12 +692,14 @@ async function ensureRealtimeAsr() {
         voiceState.socketReady = true;
         voiceState.activeAsrModel = requestedModel;
         voiceState.socketPromise = null;
+        if (asrStatus) asrStatus.textContent = `${asrModelLabel(requestedModel)}｜已連線`;
         resolve();
         return;
       }
       handleRealtimeAsrEvent(data);
     };
     socket.onerror = () => {
+      if (asrStatus) asrStatus.textContent = "連線失敗";
       if (!settled) {
         voiceState.socketPromise = null;
         reject(new Error("無法連線到即時 ASR。"));
@@ -580,6 +710,7 @@ async function ensureRealtimeAsr() {
       voiceState.socketReady = false;
       voiceState.activeAsrModel = null;
       voiceState.socketPromise = null;
+      if (asrStatus) asrStatus.textContent = "連線已關閉";
       if (!settled) reject(new Error("即時 ASR 連線已關閉。"));
       else if (voiceState.continuous) stopVoiceSession("即時 ASR 連線已中斷。");
     };
@@ -602,6 +733,7 @@ async function startVoiceListening() {
     voiceButton.classList.add("listening");
     voiceButton.setAttribute("aria-label", "停止即時語音對話");
     setVoiceStatus("正在聽…自然說完一句話即可");
+    updateCallControls("active");
     startRealtimeCapture();
   } catch (error) {
     stopVoiceSession(`無法啟動語音：${error.message}`);
@@ -617,13 +749,17 @@ function stopVoiceSession(status = "語音對話已停止；按麥克風可重�
   disarmBargeIn();
   stopRealtimeCapture();
   stopVoicePlayback();
-  if (voiceState.socket?.readyState === WebSocket.OPEN) {
+  if (voiceTestMode) {
+    closeRealtimeAsr();
+  } else if (voiceState.socket?.readyState === WebSocket.OPEN) {
     voiceState.socket.send(JSON.stringify({ action: "cancel" }));
   }
   voiceButton.classList.remove("listening", "speaking");
   voiceButton.setAttribute("aria-label", "開始即時語音對話");
   asrModelSelect.disabled = false;
   bargeInModeSelect.disabled = false;
+  updateCallControls("idle");
+  if (asrStatus) asrStatus.textContent = "尚未連線";
   setVoiceStatus(status);
 }
 
@@ -633,37 +769,70 @@ async function playVoiceResponse(response, signal) {
   let scheduler = null;
   let pending = "";
   let turnId = null;
-  let turnReceived = false;
+  let contentReceived = false;
   let audioReceived = false;
   let ttsFailed = false;
   let completed = false;
+  let greetingResponse = false;
+  let responseSubtitleNodes = [];
+
+  const prepareScheduler = (characterCount) => {
+    scheduler = new VoicePlayback.VoicePlaybackScheduler({
+      audioContext: voiceState.audioContext,
+      destination: voiceState.audioContext.destination,
+      activeSources: voiceState.activeSources,
+      initialBufferSeconds: VoicePlayback.recommendedInitialBufferSeconds(characterCount),
+    });
+    voiceState.playbackScheduler = scheduler;
+  };
 
   const handleEvent = async (event) => {
     if (signal.aborted) throw new DOMException("回覆已中斷。", "AbortError");
     if (event.type === "turn") {
       document.querySelector("#voice-loading-message")?.remove();
-      appendAssistantMessage(event.turn);
+      appendAssistantMessage(event.turn, true, {
+        progressiveSegments: voiceTestMode ? event.speech_segments || [] : [],
+      });
+      responseSubtitleNodes = [...voiceState.subtitleNodes];
       voiceState.replyDisplayed = true;
       turnId = event.turn.turn_id;
-      scheduler = new VoicePlayback.VoicePlaybackScheduler({
-        audioContext: voiceState.audioContext,
-        destination: voiceState.audioContext.destination,
-        activeSources: voiceState.activeSources,
-        initialBufferSeconds: VoicePlayback.recommendedInitialBufferSeconds(
-          event.turn.result.answer.length,
-        ),
-      });
-      voiceState.playbackScheduler = scheduler;
+      prepareScheduler(event.turn.result.answer.length);
       if (voiceState.config?.barge_in?.enabled) {
         armBargeIn();
         startRealtimeCapture();
       }
-      turnReceived = true;
+      contentReceived = true;
       setVoiceStatus("文字回答完成，正在產生語音…可直接說話中斷");
+      return;
+    }
+    if (event.type === "greeting") {
+      const segments = event.speech_segments || [];
+      appendAssistantMessage(
+        {
+          turn_id: "voice-test-greeting",
+          result: {
+            decision: "answer",
+            answer: segments.join(""),
+            citations: [],
+          },
+        },
+        false,
+        {
+          progressiveSegments: segments,
+          label: "AI 客服・招呼語",
+          showDecision: false,
+        },
+      );
+      responseSubtitleNodes = [...voiceState.subtitleNodes];
+      prepareScheduler(segments.join("").length);
+      contentReceived = true;
+      greetingResponse = true;
+      setVoiceStatus("正在產生招呼語音…");
       return;
     }
     if (event.type === "error") {
       ttsFailed = true;
+      revealAllVoiceSubtitles(responseSubtitleNodes);
       setVoiceStatus(event.detail || "語音合成暫時無法使用。");
       return;
     }
@@ -672,13 +841,20 @@ async function playVoiceResponse(response, signal) {
       const arrivalTimeMs = performance.now();
       const bytes = Uint8Array.from(atob(event.audio), (char) => char.charCodeAt(0));
       const audioBuffer = await voiceState.audioContext.decodeAudioData(bytes.buffer.slice(0));
-      scheduler.enqueue(audioBuffer, { arrivalTimeMs });
+      scheduler.enqueue(audioBuffer, {
+        arrivalTimeMs,
+        onStart:
+          event.sentence_chunk_index === 1
+            ? () => revealVoiceSubtitle(event.sentence_index, responseSubtitleNodes)
+            : null,
+      });
       audioReceived = true;
       voiceButton.classList.add("speaking");
+      updateCallControls("speaking");
       setVoiceStatus(
         scheduler.started
-          ? "正在播放語音回答…可直接說話中斷"
-          : "正在緩衝語音回答，確保播放順暢…",
+          ? `正在播放${greetingResponse ? "招呼語" : "語音回答"}…`
+          : `正在緩衝${greetingResponse ? "招呼語" : "語音回答"}…`,
       );
     }
   };
@@ -695,12 +871,13 @@ async function playVoiceResponse(response, signal) {
       if (done) break;
     }
     if (pending.trim()) await handleEvent(JSON.parse(pending));
-    if (!turnReceived) throw new Error("沒有收到知識助手回答。");
+    if (!contentReceived) throw new Error("沒有收到知識助手回答。");
     if (!audioReceived && !ttsFailed) throw new Error("沒有收到可播放的語音。");
     if (audioReceived && scheduler) {
-      setVoiceStatus("正在播放語音回答…可直接說話中斷");
+      setVoiceStatus(`正在播放${greetingResponse ? "招呼語" : "語音回答"}…`);
       await scheduler.finish();
     }
+    revealAllVoiceSubtitles(responseSubtitleNodes);
     completed = true;
   } finally {
     if (!completed) scheduler?.interrupt();
@@ -764,6 +941,46 @@ async function submitVoiceTurn(transcript) {
   if (voiceState.continuous && !controller.signal.aborted) await startVoiceListening();
 }
 
+async function startVoiceTestCall() {
+  const greeting = greetingInput.value.trim();
+  if (!greeting) {
+    setVoiceStatus("請先設定招呼語。");
+    greetingInput.focus();
+    return;
+  }
+
+  voiceState.continuous = true;
+  updateCallControls("connecting");
+  startCallClock();
+  setAsrLive("正在建立通話，等待招呼語播放完成…");
+  try {
+    asrModelSelect.disabled = true;
+    bargeInModeSelect.disabled = true;
+    await ensureMicrophone();
+    if (!voiceState.continuous) return;
+    const controller = new AbortController();
+    voiceState.replyController = controller;
+    voiceState.replying = true;
+    const response = await fetch("/v1/voice/test-greeting-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+      body: JSON.stringify({ greeting }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error("招呼語音服務目前無法使用。");
+    await playVoiceResponse(response, controller.signal);
+    if (voiceState.continuous && !controller.signal.aborted) await startVoiceListening();
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      stopVoiceSession(`無法開始通話：${error.message}`);
+    }
+  } finally {
+    voiceState.replying = false;
+    voiceState.replyController = null;
+    voiceButton.classList.remove("speaking");
+  }
+}
+
 async function toggleVoiceSession() {
   if (voiceState.replying) {
     cancelBargeInCandidate();
@@ -779,6 +996,10 @@ async function toggleVoiceSession() {
     stopVoiceSession();
     return;
   }
+  if (voiceTestMode) {
+    await startVoiceTestCall();
+    return;
+  }
   voiceState.continuous = true;
   await startVoiceListening();
 }
@@ -787,7 +1008,11 @@ async function loadVoiceConfig() {
   try {
     const response = await fetch("/v1/voice/config", { headers: { Accept: "application/json" } });
     const config = await response.json();
-    if (!config.enabled) return;
+    if (!config.enabled) {
+      setStatusValue(voiceServiceStatus, "error", "未啟用");
+      setVoiceStatus("語音功能尚未啟用");
+      return;
+    }
     voiceState.config = config;
     const asrModels = [...new Set(config.asr_models || [config.models?.asr])].filter(Boolean);
     asrModelSelect.replaceChildren();
@@ -798,7 +1023,8 @@ async function loadVoiceConfig() {
       asrModelSelect.append(option);
     });
     asrModelSelect.value = config.models.asr;
-    asrModelControl.hidden = asrModels.length < 2;
+    asrModelSelect.disabled = false;
+    asrModelControl.hidden = !voiceTestMode && asrModels.length < 2;
     const bargeIn = config.barge_in;
     bargeInModeSelect.replaceChildren();
     for (const preset of bargeIn?.presets || []) {
@@ -808,13 +1034,29 @@ async function loadVoiceConfig() {
       bargeInModeSelect.append(option);
     }
     bargeInModeSelect.value = bargeIn?.default_mode || "standard";
+    bargeInModeSelect.disabled = false;
     bargeInControl.hidden = !bargeIn?.enabled;
     configureBargeInDetector();
     voiceButton.hidden = false;
+    voiceButton.disabled = !config.available;
+    setStatusValue(
+      voiceServiceStatus,
+      config.available ? "ready" : "warning",
+      config.available ? "服務正常" : "模型尚未就緒",
+    );
+    if (asrStatus) asrStatus.textContent = `${asrModelLabel(config.models.asr)}｜待機`;
+    if (ttsStatus) {
+      ttsStatus.textContent = `${asrModelLabel(config.models.tts)}｜${config.models.voice}`;
+    }
     setVoiceStatus(
-      config.available ? "按麥克風開始即時語音對話" : "語音模型服務尚未就緒",
+      config.available
+        ? voiceTestMode
+          ? "按「打電話」開始模擬客服來電"
+          : "按麥克風開始即時語音對話"
+        : "語音模型服務尚未就緒",
     );
   } catch {
+    setStatusValue(voiceServiceStatus, "error", "無法取得狀態");
     setVoiceStatus("無法取得語音服務狀態");
   }
 }
@@ -875,10 +1117,15 @@ document.querySelectorAll("[data-question]").forEach((button) => {
 
 clearButton.addEventListener("click", () => {
   messages.replaceChildren(initialMessage.cloneNode(true));
+  voiceState.subtitleNodes = [];
   input.focus();
 });
 
 voiceButton.addEventListener("click", toggleVoiceSession);
+hangupButton?.addEventListener("click", () => {
+  stopVoiceSession("通話已結束；可調整參數後再次撥打");
+  setAsrLive("本次通話已結束。");
+});
 asrModelSelect.addEventListener("change", () => {
   closeRealtimeAsr();
   setVoiceStatus(`已切換為 ${asrModelLabel(selectedAsrModel())}；按麥克風開始測試`);

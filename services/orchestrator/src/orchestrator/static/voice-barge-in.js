@@ -15,6 +15,50 @@
     return NON_ACTIONABLE_UTTERANCE_RE.test((text || "").trim());
   }
 
+  function sanitizeAsrTranscript(text) {
+    return (text || "").replace(/\uFFFD/gu, "");
+  }
+
+  function hasMeaningfulTranscript(text) {
+    return /[\p{L}\p{N}]/u.test(sanitizeAsrTranscript(text));
+  }
+
+  function compactContextEchoText(text) {
+    return sanitizeAsrTranscript(text)
+      .toLocaleLowerCase()
+      .replace(/臺/gu, "台")
+      .replace(/[^\p{L}\p{N}]/gu, "");
+  }
+
+  function isLikelyContextEcho(text, context) {
+    const compactText = compactContextEchoText(text);
+    const compactContext = compactContextEchoText(context);
+    if (compactText.length < 16 || !compactContext) return false;
+    if (compactContext.includes(compactText)) return true;
+
+    const terms = [
+      ...new Set(
+        (context || "")
+          .split(/[、,，；;\n]+/u)
+          .map(compactContextEchoText)
+          .filter((term) => term.length >= 2),
+      ),
+    ];
+    const covered = Array(compactText.length).fill(false);
+    let matchedTerms = 0;
+    for (const term of terms) {
+      let start = compactText.indexOf(term);
+      if (start < 0) continue;
+      matchedTerms += 1;
+      while (start >= 0) {
+        covered.fill(true, start, Math.min(start + term.length, covered.length));
+        start = compactText.indexOf(term, start + 1);
+      }
+    }
+    const coverage = covered.filter(Boolean).length / covered.length;
+    return matchedTerms >= 4 && coverage >= 0.65;
+  }
+
   class BargeInDetector {
     constructor({
       preset,
@@ -138,5 +182,11 @@
     }
   }
 
-  return { BargeInDetector, isNonActionableUtterance };
+  return {
+    BargeInDetector,
+    hasMeaningfulTranscript,
+    isLikelyContextEcho,
+    isNonActionableUtterance,
+    sanitizeAsrTranscript,
+  };
 });

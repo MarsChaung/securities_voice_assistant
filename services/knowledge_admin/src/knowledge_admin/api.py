@@ -83,6 +83,7 @@ def create_app(
         shadow_label_labels=_SHADOW_LABEL_LABELS,
         question_variant_usage_labels=_QUESTION_VARIANT_USAGE_LABELS,
         faq_import_status_labels=_FAQ_IMPORT_STATUS_LABELS,
+        voice_test_url=str(resolved_settings.voice_test_url),
     )
     app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 

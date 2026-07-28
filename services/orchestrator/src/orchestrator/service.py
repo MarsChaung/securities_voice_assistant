@@ -442,7 +442,7 @@ class TurnService:
                     decision=Decision.REFUSE,
                     intent=intent,
                     policy_rule_id="KNO-001",
-                    answer="目前沒有足夠且已核准的知識來源可回答，請改用官方客服管道。",
+                    answer="目前沒有足夠且有效的已發布知識來源可回答，請改用官方客服管道。",
                     confidence=1.0,
                 ),
                 generation=generation,

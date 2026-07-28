@@ -1,3 +1,4 @@
+from pydantic import HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,7 @@ class KnowledgeAdminSettings(BaseSettings):
         "postgresql+psycopg://sva:sva-dev-only@127.0.0.1:5433/securities_voice_assistant"
     )
     knowledge_admin_dev_identity_enabled: bool = True
+    voice_test_url: HttpUrl = HttpUrl("http://127.0.0.1:8080/voice-test")
 
     def validate_identity_mode(self) -> None:
         if self.app_env != "development" and self.knowledge_admin_dev_identity_enabled:

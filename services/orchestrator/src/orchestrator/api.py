@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import (
@@ -36,15 +36,17 @@ from .service import TurnService
 from .shadow import ThreadedShadowAnswerRunner
 from .voice import (
     BARGE_IN_PRESETS,
+    VoiceGreetingRequest,
     VoicePlaybackMetrics,
     VoiceReplyRequest,
     VoiceService,
     ndjson_event,
     realtime_asr_url,
+    split_tts_text,
 )
 
 _PACKAGE_ROOT = Path(__file__).parent
-_PILOT_ASSET_VERSION = "20260727.4"
+_PILOT_ASSET_VERSION = "20260729.3"
 
 
 def _build_knowledge_retriever(
@@ -213,6 +215,17 @@ def create_app(
             },
         )
 
+    @app.get("/voice-test", response_class=HTMLResponse, include_in_schema=False)
+    def voice_test(request: Request) -> Response:
+        return templates.TemplateResponse(
+            request=request,
+            name="voice_test.html",
+            context={
+                "knowledge_admin_url": str(resolved_settings.knowledge_admin_url),
+                "pilot_asset_version": _PILOT_ASSET_VERSION,
+            },
+        )
+
     @app.get("/healthz")
     def health() -> Response:
         availability = resolved_service.knowledge_availability()
@@ -288,11 +301,39 @@ def create_app(
 
         async def stream() -> AsyncIterator[bytes]:
             yield ndjson_event(
-                {"type": "turn", "turn": turn.model_dump(mode="json")}
+                {
+                    "type": "turn",
+                    "turn": turn.model_dump(mode="json"),
+                    "speech_segments": split_tts_text(turn.result.answer),
+                }
             )
             async for event in resolved_voice_service.stream_answer(
                 turn_id=turn.turn_id,
                 answer=turn.result.answer,
+            ):
+                yield event
+
+        return StreamingResponse(
+            stream(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/v1/voice/test-greeting-stream")
+    async def voice_test_greeting(
+        request: VoiceGreetingRequest,
+    ) -> StreamingResponse:
+        if resolved_settings.app_env != "development":
+            raise HTTPException(404, "找不到資源。")
+        if resolved_voice_service is None:
+            raise HTTPException(503, "語音服務目前未啟用。")
+        segments = split_tts_text(request.greeting)
+
+        async def stream() -> AsyncIterator[bytes]:
+            yield ndjson_event({"type": "greeting", "speech_segments": segments})
+            async for event in resolved_voice_service.stream_answer(
+                turn_id=f"voice-test-greeting-{uuid4()}",
+                answer=request.greeting,
             ):
                 yield event
 

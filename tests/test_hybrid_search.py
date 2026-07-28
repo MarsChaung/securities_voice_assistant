@@ -193,6 +193,69 @@ def test_hybrid_retrieval_keeps_low_confidence_semantic_query_unanswered() -> No
     assert match is None
 
 
+def test_contact_phone_query_does_not_fall_back_to_a_fee_answer() -> None:
+    base_document = documents()[0]
+    fee_document = KnowledgeDocument(
+        item=base_document.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-FEE-001",
+                "title": "台股人工下單手續費多少",
+                "standard_answer": "台股非電子交易手續費為千分之1.425。",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="fee-question",
+                        question_text="台股人工下單手續費多少",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base_document.source,
+    )
+    retriever = HybridKnowledgeRetriever(embedder=SyntheticEmbeddingProvider())
+
+    match = retriever.search(
+        query="臺股人工接單中心的電話是多少？",
+        intent="public_service_information",
+        documents=(fee_document,),
+    )
+
+    assert match is None
+
+
+def test_contact_phone_query_matches_a_published_phone_answer() -> None:
+    base_document = documents()[0]
+    phone_document = KnowledgeDocument(
+        item=base_document.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-PHONE-001",
+                "title": "台股人工接單中心電話",
+                "standard_answer": "市話請撥：412 8881。手機請撥：02 412 8881。",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="phone-question",
+                        question_text="請問人工下單專線是？",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base_document.source,
+    )
+    retriever = HybridKnowledgeRetriever(embedder=SyntheticEmbeddingProvider())
+
+    match = retriever.search(
+        query="人工交易的接單電話是什麼？",
+        intent="public_service_information",
+        documents=(phone_document,),
+    )
+
+    assert match is not None
+    assert match.document.item.knowledge_id == "K-FAQ-PHONE-001"
+
+
 def test_hybrid_retrieval_applies_model_specific_prefixes() -> None:
     embedder = SyntheticEmbeddingProvider()
     retriever = HybridKnowledgeRetriever(
