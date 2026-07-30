@@ -145,3 +145,10 @@ def test_barge_in_default_mode_is_restricted_to_governed_presets() -> None:
             retrieval_mode="lexical",
             barge_in_default_mode="custom",
         )
+
+
+def test_asr_endpoint_grace_is_bounded() -> None:
+    assert Settings(asr_endpoint_grace_ms=1200).asr_endpoint_grace_ms == 1200
+
+    with pytest.raises(ValidationError, match="asr_endpoint_grace_ms"):
+        Settings(asr_endpoint_grace_ms=5001)

@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import re
 import wave
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -52,12 +53,35 @@ BARGE_IN_PRESETS: tuple[dict[str, str | int | float], ...] = (
     },
 )
 
+VOICE_FAREWELL_MESSAGE = "謝謝您的來電，祝您順心，再見"
+_CALL_ENDING_UTTERANCES = frozenset(
+    {
+        "沒問題了",
+        "沒有問題了",
+        "沒事了",
+        "再見",
+        "掰掰",
+        "拜拜",
+        "先這樣",
+        "就這樣",
+        "謝謝再見",
+        "再見謝謝",
+        "先這樣謝謝",
+        "就這樣謝謝",
+    }
+)
+
 
 def realtime_asr_url(audio_public_base_url: str) -> str:
     parsed = urlsplit(audio_public_base_url)
     scheme = "wss" if parsed.scheme == "https" else "ws"
     path = parsed.path.rstrip("/") + "/audio/transcriptions/realtime"
     return urlunsplit((scheme, parsed.netloc, path, "", ""))
+
+
+def is_call_ending_utterance(text: str) -> bool:
+    compact = re.sub(r"[\s，,、。！？!?；;：:]+", "", text).casefold()
+    return compact in _CALL_ENDING_UTTERANCES
 
 
 def split_tts_text(

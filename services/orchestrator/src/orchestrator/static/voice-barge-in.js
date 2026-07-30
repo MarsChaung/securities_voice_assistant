@@ -23,6 +23,15 @@
     return /[\p{L}\p{N}]/u.test(sanitizeAsrTranscript(text));
   }
 
+  function shouldResumePlaybackAfterBargeIn(text) {
+    const sanitized = sanitizeAsrTranscript(text).trim();
+    if (!hasMeaningfulTranscript(sanitized)) return true;
+    if (/^(?:再見|掰掰|拜拜)[，,、。！？!?\s]*$/u.test(sanitized)) return false;
+    if (isNonActionableUtterance(sanitized)) return true;
+    const meaningfulCharacters = sanitized.match(/[\p{L}\p{N}]/gu) || [];
+    return meaningfulCharacters.length <= 2;
+  }
+
   function compactContextEchoText(text) {
     return sanitizeAsrTranscript(text)
       .toLocaleLowerCase()
@@ -187,6 +196,7 @@
     hasMeaningfulTranscript,
     isLikelyContextEcho,
     isNonActionableUtterance,
+    shouldResumePlaybackAfterBargeIn,
     sanitizeAsrTranscript,
   };
 });

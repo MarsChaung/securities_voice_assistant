@@ -290,6 +290,7 @@ class TurnService:
         if policy_result.intent in {
             "credential_recovery_guidance",
             "account_authorization_guidance",
+            "personal_data_change_guidance",
         }:
             return False
         return not policy_result.policy_rule_id.startswith("POL-REFUSE-")

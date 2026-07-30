@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     tts_ref_audio: str | None = None
     tts_ref_text: SecretStr | None = None
     voice_timeout_seconds: float = Field(default=180.0, gt=0)
+    asr_endpoint_grace_ms: int = Field(default=1200, ge=0, le=5000)
     barge_in_enabled: bool = True
     barge_in_default_mode: Literal["sensitive", "standard", "resistant"] = "standard"
 

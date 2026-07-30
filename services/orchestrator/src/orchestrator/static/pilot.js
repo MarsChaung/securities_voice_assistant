@@ -26,6 +26,9 @@ const ttsStatus = document.querySelector("#tts-status");
 const knowledgeCount = document.querySelector("#knowledge-count");
 const phaseStatus = document.querySelector("#phase-status");
 const asrLiveText = document.querySelector("#asr-live-text");
+const conversationPanel = document.querySelector(".conversation-panel");
+const controlColumn = document.querySelector(".control-column");
+const desktopVoiceTestLayout = window.matchMedia("(min-width: 981px)");
 const voiceState = {
   config: null,
   stream: null,
@@ -47,11 +50,15 @@ const voiceState = {
   replyDisplayed: false,
   bargeInDetector: null,
   bargeInStreaming: false,
+  pendingBargeInMetrics: null,
   preRollFrames: [],
   preRollSamples: 0,
+  endpointTimer: null,
+  pendingEndpointTranscript: "",
   subtitleNodes: [],
   callStartedAt: null,
   callTimer: null,
+  layoutObserver: null,
 };
 
 function selectedAsrModel() {
@@ -75,7 +82,36 @@ function selectedBargeInPreset() {
   return presets.find((preset) => preset.id === bargeInModeSelect.value) || presets[0];
 }
 
+function asrEndpointGraceMs() {
+  return Math.max(0, Number(voiceState.config?.asr_endpoint_grace_ms) || 0);
+}
+
+function clearPendingAsrEndpoint() {
+  if (voiceState.endpointTimer !== null) clearTimeout(voiceState.endpointTimer);
+  voiceState.endpointTimer = null;
+  voiceState.pendingEndpointTranscript = "";
+}
+
+function mergeAsrTranscripts(first, second) {
+  const leading = VoiceBargeIn.sanitizeAsrTranscript(first).trim();
+  const trailing = VoiceBargeIn.sanitizeAsrTranscript(second).trim();
+  if (!leading) return trailing;
+  if (!trailing || leading.endsWith(trailing)) return leading;
+  if (trailing.startsWith(leading)) return trailing;
+  return `${leading} ${trailing}`;
+}
+
+function resumePendingAsrEndpoint(nextText = "") {
+  if (voiceState.endpointTimer === null) return false;
+  const pending = voiceState.pendingEndpointTranscript;
+  clearPendingAsrEndpoint();
+  voiceState.partialTranscript = mergeAsrTranscripts(pending, nextText);
+  setVoiceStatus("偵測到你繼續說話，已取消送出並持續聆聽…");
+  return true;
+}
+
 function closeRealtimeAsr() {
+  clearPendingAsrEndpoint();
   const socket = voiceState.socket;
   voiceState.socket = null;
   voiceState.socketReady = false;
@@ -102,6 +138,26 @@ function element(tag, className, text) {
 
 function scrollToLatest() {
   messages.scrollTop = messages.scrollHeight;
+  requestAnimationFrame(() => {
+    messages.scrollTop = messages.scrollHeight;
+  });
+}
+
+function syncVoiceTestPanelHeight() {
+  if (!voiceTestMode || !conversationPanel || !controlColumn) return;
+  if (!desktopVoiceTestLayout.matches) {
+    conversationPanel.style.height = "";
+    return;
+  }
+  conversationPanel.style.height = `${controlColumn.getBoundingClientRect().height}px`;
+}
+
+function initializeVoiceTestLayout() {
+  if (!voiceTestMode || !conversationPanel || !controlColumn) return;
+  voiceState.layoutObserver = new ResizeObserver(syncVoiceTestPanelHeight);
+  voiceState.layoutObserver.observe(controlColumn);
+  desktopVoiceTestLayout.addEventListener("change", syncVoiceTestPanelHeight);
+  syncVoiceTestPanelHeight();
 }
 
 function removeConversationEmptyState() {
@@ -487,19 +543,18 @@ function configureBargeInDetector() {
     onRestore: () => {
       const activePreset = selectedBargeInPreset();
       voiceState.playbackScheduler?.restore(activePreset.fade_out_ms);
+      voiceState.pendingBargeInMetrics = null;
       cancelBargeInCandidate();
       setVoiceStatus("已忽略短促聲音，繼續播放語音回答…");
     },
     onConfirm: (metrics) => {
       if (!voiceState.replying || !voiceState.playbackScheduler) return;
-      voiceState.playbackScheduler.interrupt("barge_in", metrics);
-      voiceState.playbackScheduler = null;
-      voiceState.replyController?.abort();
+      voiceState.pendingBargeInMetrics = metrics;
       voiceState.listening = true;
       voiceState.bargeInStreaming = true;
       voiceButton.classList.remove("speaking");
       voiceButton.classList.add("listening");
-      setVoiceStatus("已停止回答，正在聽你接著說…");
+      setVoiceStatus("已降低回答音量，正在確認插話內容…");
     },
   });
 }
@@ -508,6 +563,7 @@ function armBargeIn() {
   if (!voiceState.bargeInDetector) return;
   voiceState.bargeInDetector.setPreset(selectedBargeInPreset());
   voiceState.bargeInStreaming = false;
+  voiceState.pendingBargeInMetrics = null;
   resetPreRoll();
   voiceState.bargeInDetector.arm();
 }
@@ -515,6 +571,7 @@ function armBargeIn() {
 function disarmBargeIn({ restore = false } = {}) {
   voiceState.bargeInDetector?.disarm({ restore });
   voiceState.bargeInStreaming = false;
+  voiceState.pendingBargeInMetrics = null;
   resetPreRoll();
 }
 
@@ -570,13 +627,116 @@ function startRealtimeCapture() {
   voiceState.captureNode = captureNode;
 }
 
+function restorePlaybackAfterRejectedBargeIn(status) {
+  const scheduler = voiceState.playbackScheduler;
+  if (!voiceState.replying || !scheduler || !voiceState.pendingBargeInMetrics) {
+    return false;
+  }
+  const activePreset = selectedBargeInPreset();
+  scheduler.recordBargeInMetrics?.(voiceState.pendingBargeInMetrics);
+  scheduler.restore(activePreset.fade_out_ms);
+  voiceState.pendingBargeInMetrics = null;
+  voiceState.listening = false;
+  cancelBargeInCandidate();
+  armBargeIn();
+  voiceButton.classList.remove("listening");
+  voiceButton.classList.add("speaking");
+  updateCallControls("speaking");
+  setVoiceStatus(status);
+  startRealtimeCapture();
+  return true;
+}
+
+function commitPendingBargeIn() {
+  if (!voiceState.pendingBargeInMetrics || !voiceState.playbackScheduler) return;
+  voiceState.playbackScheduler.interrupt(
+    "barge_in",
+    voiceState.pendingBargeInMetrics,
+  );
+  voiceState.playbackScheduler = null;
+  voiceState.pendingBargeInMetrics = null;
+  voiceState.bargeInStreaming = false;
+  voiceState.replyController?.abort();
+}
+
+function continueAfterIgnoredTranscript(status) {
+  voiceState.partialTranscript = "";
+  if (
+    restorePlaybackAfterRejectedBargeIn(
+      "已忽略短促插話，繼續播放原本的語音回答…",
+    )
+  ) {
+    setAsrLive(status);
+    return;
+  }
+  setVoiceStatus(status);
+  if (voiceState.continuous) void startVoiceListening();
+}
+
+function finalizeRealtimeTranscript(transcript) {
+  voiceState.listening = false;
+  stopRealtimeCapture();
+  voiceButton.classList.remove("listening");
+  setAsrLive(transcript || "沒有辨識到有效語音。");
+
+  const invalidTranscript =
+    !VoiceBargeIn.hasMeaningfulTranscript(transcript)
+    || VoiceBargeIn.isLikelyContextEcho(
+      transcript,
+      voiceState.config?.asr_context || "",
+    );
+  if (invalidTranscript) {
+    continueAfterIgnoredTranscript("已忽略無效辨識或環境雜音，持續聆聽中…");
+    return;
+  }
+  if (
+    voiceState.pendingBargeInMetrics
+    && VoiceBargeIn.shouldResumePlaybackAfterBargeIn(transcript)
+  ) {
+    continueAfterIgnoredTranscript(`已忽略短插話「${transcript}」。`);
+    return;
+  }
+  if (VoiceBargeIn.isNonActionableUtterance(transcript)) {
+    continueAfterIgnoredTranscript("聽到了，請繼續說你的問題…");
+    return;
+  }
+
+  if (voiceState.pendingBargeInMetrics) commitPendingBargeIn();
+  void submitVoiceTurn(transcript);
+}
+
+function scheduleRealtimeTranscript(transcript) {
+  clearPendingAsrEndpoint();
+  voiceState.pendingEndpointTranscript = transcript;
+  const delayMs = asrEndpointGraceMs();
+  setVoiceStatus(
+    delayMs
+      ? `偵測到停頓，將再等待 ${(delayMs / 1000).toFixed(1)} 秒…`
+      : "正在送出語音辨識結果…",
+  );
+  const finalize = () => {
+    const pending = voiceState.pendingEndpointTranscript;
+    voiceState.endpointTimer = null;
+    voiceState.pendingEndpointTranscript = "";
+    finalizeRealtimeTranscript(pending);
+  };
+  if (!delayMs) {
+    finalize();
+    return;
+  }
+  voiceState.endpointTimer = setTimeout(finalize, delayMs);
+}
+
 function handleRealtimeAsrEvent(data) {
   if (data.error) {
     stopVoiceSession("即時語音辨識發生錯誤，請稍後再試。");
     return;
   }
   if (data.type === "delta") {
-    voiceState.partialTranscript += VoiceBargeIn.sanitizeAsrTranscript(data.delta);
+    const delta = VoiceBargeIn.sanitizeAsrTranscript(data.delta);
+    if (!resumePendingAsrEndpoint(delta)) {
+      voiceState.partialTranscript += delta;
+    }
     const partial = voiceState.partialTranscript.trim();
     if (partial) {
       setVoiceStatus(`辨識中：${partial.slice(-36)}`);
@@ -585,63 +745,56 @@ function handleRealtimeAsrEvent(data) {
     return;
   }
   if (data.text && data.is_partial) {
-    voiceState.partialTranscript = VoiceBargeIn.sanitizeAsrTranscript(data.text).trim();
+    const partial = VoiceBargeIn.sanitizeAsrTranscript(data.text).trim();
+    if (!resumePendingAsrEndpoint(partial)) {
+      voiceState.partialTranscript = partial;
+    }
     setVoiceStatus(`辨識中：${voiceState.partialTranscript.slice(-36)}`);
     setAsrLive(voiceState.partialTranscript);
     return;
   }
   if (data.type === "candidate_end") {
-    voiceState.partialTranscript = VoiceBargeIn.sanitizeAsrTranscript(
+    const candidate = VoiceBargeIn.sanitizeAsrTranscript(
       data.text || voiceState.partialTranscript,
     ).trim();
+    if (!resumePendingAsrEndpoint(candidate)) {
+      voiceState.partialTranscript = candidate;
+    }
     setVoiceStatus(
       data.semantic_complete ? "正在確認你是否說完…" : "句子似乎還沒說完，持續聆聽中…",
     );
     return;
   }
   if (data.type === "speech_start") {
+    resumePendingAsrEndpoint();
     if (voiceState.replying && voiceState.bargeInStreaming) {
       voiceState.bargeInDetector?.markSpeech();
     }
     return;
   }
   if (data.type === "speech_resumed") {
+    resumePendingAsrEndpoint();
     setVoiceStatus("偵測到你繼續說話，持續聆聽中…");
     return;
   }
   if (data.type === "noise_rejected") {
+    if (voiceState.endpointTimer !== null) {
+      setVoiceStatus("已忽略短暫環境音，繼續等待你是否說完…");
+      return;
+    }
     voiceState.partialTranscript = "";
     setVoiceStatus("已忽略短暫環境音，持續聆聽中…");
     setAsrLive("已忽略短暫環境音，等待有效語音…");
     return;
   }
   if (data.type === "utterance_end" && voiceState.listening) {
-    voiceState.listening = false;
-    stopRealtimeCapture();
-    voiceButton.classList.remove("listening");
-    const transcript = VoiceBargeIn.sanitizeAsrTranscript(
-      data.text || voiceState.partialTranscript,
-    ).trim();
-    setAsrLive(transcript || "沒有辨識到有效語音。");
-    if (
-      !VoiceBargeIn.hasMeaningfulTranscript(transcript)
-      || VoiceBargeIn.isLikelyContextEcho(
-        transcript,
-        voiceState.config?.asr_context || "",
-      )
-    ) {
-      voiceState.partialTranscript = "";
-      setVoiceStatus("已忽略無效辨識或環境雜音，持續聆聽中…");
-      if (voiceState.continuous) void startVoiceListening();
-      return;
-    }
-    if (VoiceBargeIn.isNonActionableUtterance(transcript)) {
-      voiceState.partialTranscript = "";
-      setVoiceStatus("聽到了，請繼續說你的問題…");
-      if (voiceState.continuous) void startVoiceListening();
-      return;
-    }
-    void submitVoiceTurn(transcript);
+    const accumulated = mergeAsrTranscripts(
+      voiceState.pendingEndpointTranscript,
+      voiceState.partialTranscript,
+    );
+    const transcript = mergeAsrTranscripts(accumulated, data.text || "");
+    voiceState.partialTranscript = transcript;
+    scheduleRealtimeTranscript(transcript);
   }
 }
 
@@ -720,6 +873,7 @@ async function ensureRealtimeAsr() {
 
 async function startVoiceListening() {
   try {
+    clearPendingAsrEndpoint();
     asrModelSelect.disabled = true;
     bargeInModeSelect.disabled = true;
     await ensureMicrophone();
@@ -741,6 +895,7 @@ async function startVoiceListening() {
 }
 
 function stopVoiceSession(status = "語音對話已停止；按麥克風可重新開始") {
+  clearPendingAsrEndpoint();
   voiceState.continuous = false;
   voiceState.listening = false;
   voiceState.replying = false;
@@ -774,6 +929,7 @@ async function playVoiceResponse(response, signal) {
   let ttsFailed = false;
   let completed = false;
   let greetingResponse = false;
+  let farewellResponse = false;
   let responseSubtitleNodes = [];
 
   const prepareScheduler = (characterCount) => {
@@ -805,11 +961,12 @@ async function playVoiceResponse(response, signal) {
       setVoiceStatus("文字回答完成，正在產生語音…可直接說話中斷");
       return;
     }
-    if (event.type === "greeting") {
+    if (event.type === "greeting" || event.type === "farewell") {
       const segments = event.speech_segments || [];
+      const isFarewell = event.type === "farewell";
       appendAssistantMessage(
         {
-          turn_id: "voice-test-greeting",
+          turn_id: isFarewell ? "voice-call-farewell" : "voice-test-greeting",
           result: {
             decision: "answer",
             answer: segments.join(""),
@@ -819,15 +976,16 @@ async function playVoiceResponse(response, signal) {
         false,
         {
           progressiveSegments: segments,
-          label: "AI 客服・招呼語",
+          label: isFarewell ? "AI 客服・結束語" : "AI 客服・招呼語",
           showDecision: false,
         },
       );
       responseSubtitleNodes = [...voiceState.subtitleNodes];
       prepareScheduler(segments.join("").length);
       contentReceived = true;
-      greetingResponse = true;
-      setVoiceStatus("正在產生招呼語音…");
+      greetingResponse = !isFarewell;
+      farewellResponse = isFarewell;
+      setVoiceStatus(isFarewell ? "正在產生結束語音…" : "正在產生招呼語音…");
       return;
     }
     if (event.type === "error") {
@@ -851,10 +1009,15 @@ async function playVoiceResponse(response, signal) {
       audioReceived = true;
       voiceButton.classList.add("speaking");
       updateCallControls("speaking");
+      const playbackLabel = farewellResponse
+        ? "結束語"
+        : greetingResponse
+          ? "招呼語"
+          : "語音回答";
       setVoiceStatus(
         scheduler.started
-          ? `正在播放${greetingResponse ? "招呼語" : "語音回答"}…`
-          : `正在緩衝${greetingResponse ? "招呼語" : "語音回答"}…`,
+          ? `正在播放${playbackLabel}…`
+          : `正在緩衝${playbackLabel}…`,
       );
     }
   };
@@ -874,7 +1037,12 @@ async function playVoiceResponse(response, signal) {
     if (!contentReceived) throw new Error("沒有收到知識助手回答。");
     if (!audioReceived && !ttsFailed) throw new Error("沒有收到可播放的語音。");
     if (audioReceived && scheduler) {
-      setVoiceStatus(`正在播放${greetingResponse ? "招呼語" : "語音回答"}…`);
+      const playbackLabel = farewellResponse
+        ? "結束語"
+        : greetingResponse
+          ? "招呼語"
+          : "語音回答";
+      setVoiceStatus(`正在播放${playbackLabel}…`);
       await scheduler.finish();
     }
     revealAllVoiceSubtitles(responseSubtitleNodes);
@@ -893,6 +1061,7 @@ async function playVoiceResponse(response, signal) {
       stopRealtimeCapture();
     }
   }
+  return { endsCall: farewellResponse };
 }
 
 async function submitVoiceTurn(transcript) {
@@ -917,7 +1086,12 @@ async function submitVoiceTurn(transcript) {
       signal: controller.signal,
     });
     if (!response.ok) throw new Error("語音回答服務目前無法使用。");
-    await playVoiceResponse(response, controller.signal);
+    const outcome = await playVoiceResponse(response, controller.signal);
+    if (outcome.endsCall) {
+      stopVoiceSession("已播放結束語，本次通話已結束");
+      setAsrLive("客戶已結束本次通話。");
+      return;
+    }
     setVoiceStatus("本輪完成，正在重新開啟麥克風…");
   } catch (error) {
     const disposition = VoicePlayback.voiceFailureDisposition(
@@ -934,9 +1108,11 @@ async function submitVoiceTurn(transcript) {
       setVoiceStatus("文字回答已保留；語音播放未完整完成，正在重新開啟麥克風…");
     }
   } finally {
-    if (voiceState.replyController === controller) voiceState.replyController = null;
-    voiceState.replying = false;
-    voiceButton.classList.remove("speaking");
+    if (voiceState.replyController === controller) {
+      voiceState.replyController = null;
+      voiceState.replying = false;
+      voiceButton.classList.remove("speaking");
+    }
   }
   if (voiceState.continuous && !controller.signal.aborted) await startVoiceListening();
 }
@@ -1137,3 +1313,4 @@ bargeInModeSelect.addEventListener("change", () => {
 });
 loadSystemState();
 loadVoiceConfig();
+initializeVoiceTestLayout();

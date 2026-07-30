@@ -28,7 +28,14 @@ class DomainPolicyEngine:
             "POL-HANDOFF-002",
             "personal_data_change",
             PolicyAction.HANDOFF,
-            ("修改個人資料", "更改個人資料", "變更手機", "變更地址"),
+            (
+                "修改個人資料",
+                "修改個人基本資料",
+                "更改個人資料",
+                "更改個人基本資料",
+                "變更手機",
+                "變更地址",
+            ),
         ),
         PolicyRule(
             "POL-REFUSE-001",
@@ -187,8 +194,11 @@ class DomainPolicyEngine:
         matches = [rule for rule in self._rules if rule.matches(normalized_text)]
 
         handoff_matches = [rule for rule in matches if rule.action is PolicyAction.HANDOFF]
-        if handoff_matches:
-            return self._to_result(handoff_matches[0])
+        mandatory_handoffs = [
+            rule for rule in handoff_matches if rule.intent != "personal_data_change"
+        ]
+        if mandatory_handoffs:
+            return self._to_result(mandatory_handoffs[0])
 
         refuse_matches = [rule for rule in matches if rule.action is PolicyAction.REFUSE]
         non_credential_refusals = [
@@ -198,6 +208,17 @@ class DomainPolicyEngine:
         ]
         if non_credential_refusals:
             return self._to_result(non_credential_refusals[0])
+
+        if self._is_public_personal_data_change_guidance(normalized_text):
+            return PolicyResult(
+                action=PolicyAction.ALLOW,
+                intent="personal_data_change_guidance",
+                policy_rule_id="POL-ALLOW-009",
+                confidence=1.0,
+            )
+
+        if handoff_matches:
+            return self._to_result(handoff_matches[0])
 
         if self._is_public_credential_recovery_guidance(normalized_text):
             return PolicyResult(
@@ -305,3 +326,36 @@ class DomainPolicyEngine:
                 "多賬戶授權",
             )
         )
+
+    @staticmethod
+    def _is_public_personal_data_change_guidance(normalized_text: str) -> bool:
+        if any(
+            phrase in normalized_text
+            for phrase in (
+                "幫我",
+                "替我",
+                "代我",
+                "直接修改",
+                "直接更改",
+                "直接變更",
+            )
+        ):
+            return False
+
+        asks_for_instructions = any(
+            phrase in normalized_text
+            for phrase in ("如何", "怎麼", "怎樣", "哪裡", "方式", "流程", "步驟")
+        )
+        concerns_personal_data_change = any(
+            phrase in normalized_text
+            for phrase in (
+                "修改個人基本資料",
+                "更改個人基本資料",
+                "變更個人基本資料",
+                "修改個人資料",
+                "更改個人資料",
+                "變更個人資料",
+                "個資變更",
+            )
+        )
+        return asks_for_instructions and concerns_personal_data_change

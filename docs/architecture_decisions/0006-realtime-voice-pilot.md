@@ -17,9 +17,13 @@
 
 ## 互動方式
 
-麥克風按鈕開啟連續語音模式。播放期間以 `echoCancellation=true`、`noiseSuppression=true`、`autoGainControl=false` 持續收音，避免放大遠距人聲。AudioWorklet 依環境底噪與受控模式門檻進行第一階段偵測：持續音量達門檻時先降低播放音量並送出 pre-roll；MLX Audio WebRTC VAD 回報新的人聲起點、且持續時間達確認門檻後，瀏覽器立即停止本機播放並非同步取消 TTS HTTP 串流，再沿用同一 ASR turn 接收使用者後續語音。短促聲音未通過確認時會取消 ASR 候選並恢復播放。播放期間再次按下麥克風仍保留為手動中斷備援。
+麥克風按鈕開啟連續語音模式。MLX Audio 回傳 `utterance_end` 後，瀏覽器預設再等待 1.2 秒；期間若使用者繼續說話，會取消送出並合併前後逐字稿。等待時間可由 `SVA_ASR_ENDPOINT_GRACE_MS` 調整。
+
+播放期間以 `echoCancellation=true`、`noiseSuppression=true`、`autoGainControl=false` 持續收音，避免放大遠距人聲。AudioWorklet 依環境底噪與受控模式門檻進行第一階段偵測：持續音量達門檻時先降低播放音量並送出 pre-roll；MLX Audio WebRTC VAD 回報新的人聲起點、且持續時間達確認門檻後，瀏覽器等待最終逐字稿。只有可形成問題的插話才會停止本機播放並取消 TTS；噪音、非行動性回應或一至二字的未完整插話會恢復原本回答。播放期間再次按下麥克風仍保留為手動中斷備援。
 
 插話模式為 `sensitive`、`standard`、`resistant` 三組受控 preset，預設由 `SVA_BARGE_IN_DEFAULT_MODE` 決定，工作階段開始前可於 Web Pilot 切換。瀏覽器不提供任意數值輸入，避免未經校準的參數進入正式服務。
+
+明確結束語（例如「沒問題了」、「沒事了」、「再見」）不進入一般知識與意圖路由，後端只串流固定結束語「謝謝您的來電，祝您順心，再見」，播放完成後由瀏覽器結束通話。
 
 ## 資料與稽核
 

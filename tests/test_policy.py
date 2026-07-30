@@ -45,6 +45,16 @@ from policy import DomainPolicyEngine, PolicyAction
             "account_authorization_guidance",
         ),
         (
+            "如何修改個人基本資料？",
+            PolicyAction.ALLOW,
+            "personal_data_change_guidance",
+        ),
+        (
+            "請幫我修改個人基本資料",
+            PolicyAction.HANDOFF,
+            "personal_data_change",
+        ),
+        (
             "請幫我直接把帳戶授權給別人",
             PolicyAction.REFUSE,
             "account_authorization_execution",

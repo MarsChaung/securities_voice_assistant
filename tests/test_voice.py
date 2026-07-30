@@ -15,8 +15,10 @@ from orchestrator.api import create_app
 from orchestrator.config import Settings
 from orchestrator.service import TurnService
 from orchestrator.voice import (
+    VOICE_FAREWELL_MESSAGE,
     VoiceService,
     extract_wav_frames,
+    is_call_ending_utterance,
     realtime_asr_url,
     split_tts_text,
 )
@@ -109,6 +111,22 @@ def test_voice_helpers_preserve_realtime_url_and_complete_wav_frames() -> None:
         "第一句回答。",
         "第二句補充。",
     ]
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    ["沒問題了", "沒事了。", "再見", "謝謝，再見", "先這樣，謝謝"],
+)
+def test_call_ending_utterance_recognises_explicit_closings(transcript: str) -> None:
+    assert is_call_ending_utterance(transcript) is True
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    ["這個問題沒事了嗎", "再見之前我還想問開戶", "沒問題，請繼續", "我想問手續費"],
+)
+def test_call_ending_utterance_does_not_hide_real_questions(transcript: str) -> None:
+    assert is_call_ending_utterance(transcript) is False
 
 
 def test_tts_segmenter_uses_only_selected_punctuation_near_target_length() -> None:
@@ -244,6 +262,7 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert config.json()["asr_context"] == ""
     assert config.json()["barge_in"]["enabled"] is True
     assert config.json()["barge_in"]["default_mode"] == "standard"
+    assert config.json()["asr_endpoint_grace_ms"] == 1200
     assert [preset["id"] for preset in config.json()["barge_in"]["presets"]] == [
         "sensitive",
         "standard",
@@ -255,6 +274,41 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert events[0]["speech_segments"] == [turn["result"]["answer"]]
     assert turn["result"]["decision"] == "refuse"
     assert turn["result"]["policy_rule_id"] == "KNO-001"
+    assert events[1]["type"] == "audio"
+    assert events[-1]["type"] == "done"
+
+
+def test_voice_endpoint_streams_fixed_farewell_for_call_ending_utterance() -> None:
+    frame = make_wav_frame()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["input"] == VOICE_FAREWELL_MESSAGE
+        return httpx.Response(200, content=frame)
+
+    voice = voice_service(httpx.MockTransport(handler))
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(service=TurnService(), settings=settings, voice_service=voice)
+    ) as client:
+        response = client.post(
+            "/v1/voice/respond-stream",
+            json={"transcript": "沒問題了"},
+        )
+
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[0] == {
+        "type": "farewell",
+        "speech_segments": [VOICE_FAREWELL_MESSAGE],
+    }
     assert events[1]["type"] == "audio"
     assert events[-1]["type"] == "done"
 

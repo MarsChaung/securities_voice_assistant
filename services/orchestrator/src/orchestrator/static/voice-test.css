@@ -104,6 +104,7 @@ button:disabled, select:disabled { cursor: not-allowed; opacity: 0.55; }
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(360px, 0.75fr);
   gap: 22px;
+  align-items: start;
 }
 .conversation-panel, .control-card {
   background: #fff;
@@ -154,6 +155,8 @@ h2 { font-size: 21px; }
   min-height: 0;
   padding: 28px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   scroll-behavior: smooth;
 }
 .conversation-empty {
@@ -268,7 +271,7 @@ h2 { font-size: 21px; }
 }
 .composer-meta { display: flex; justify-content: space-between; margin-top: 6px; color: var(--muted); font-size: 10px; }
 
-.control-column { display: flex; flex-direction: column; gap: 22px; }
+.control-column { display: flex; flex-direction: column; gap: 22px; align-self: start; }
 .control-card { padding: 22px; }
 .card-heading { margin-bottom: 19px; }
 .clear-button {

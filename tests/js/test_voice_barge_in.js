@@ -6,6 +6,7 @@ const {
   hasMeaningfulTranscript,
   isLikelyContextEcho,
   isNonActionableUtterance,
+  shouldResumePlaybackAfterBargeIn,
   sanitizeAsrTranscript,
 } = require("../../services/orchestrator/src/orchestrator/static/voice-barge-in.js");
 
@@ -36,6 +37,15 @@ test("recognises non-actionable turns without hiding a real follow-up question",
   assert.equal(isNonActionableUtterance("嗯，我想問線上開戶資格"), false);
   assert.equal(isNonActionableUtterance("我知道了，那要如何補件？"), false);
   assert.equal(isNonActionableUtterance("好，請說明假除權息"), false);
+});
+
+test("resumes playback after noise, acknowledgements, or incomplete short speech", () => {
+  for (const text of ["", "。！？", "嗯", "是", "台積", "好的", "我知道了"]) {
+    assert.equal(shouldResumePlaybackAfterBargeIn(text), true);
+  }
+  assert.equal(shouldResumePlaybackAfterBargeIn("再見"), false);
+  assert.equal(shouldResumePlaybackAfterBargeIn("什麼是假除權息"), false);
+  assert.equal(shouldResumePlaybackAfterBargeIn("台積電可以買嗎"), false);
 });
 
 test("sanitises invalid ASR output and rejects context echo", () => {

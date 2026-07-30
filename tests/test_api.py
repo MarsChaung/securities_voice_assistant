@@ -200,15 +200,25 @@ def test_voice_customer_service_test_page_is_served() -> None:
 
     page = client.get("/voice-test")
     stylesheet = client.get("/pilot/static/voice-test.css")
+    script = client.get("/pilot/static/pilot.js")
 
     assert page.status_code == 200
     assert 'data-voice-test="true"' in page.text
     assert 'id="voice-button"' in page.text
     assert 'id="hangup-button"' in page.text
     assert 'id="greeting"' in page.text
+    assert "您好，我是 AI 語音客服，很高興為您服務。" in page.text
+    assert "請問今天想了解什麼證券知識呢？" not in page.text
     assert "ASR 即時辨識" in page.text
     assert "依語音播放分段顯示" in page.text
     assert stylesheet.status_code == 200
+    assert script.status_code == 200
+    assert "scrollbar-gutter: stable" in stylesheet.text
+    assert "initializeVoiceTestLayout()" in script.text
+    assert "requestAnimationFrame" in script.text
+    assert "asr_endpoint_grace_ms" in script.text
+    assert "shouldResumePlaybackAfterBargeIn" in script.text
+    assert 'event.type === "farewell"' in script.text
 
 
 def test_feedback_endpoint_logs_only_allowlisted_metadata(
@@ -847,6 +857,82 @@ def test_public_account_authorization_guidance_bypasses_credential_risk_router()
     assert result["decision"] == "answer"
     assert result["intent"] == "account_authorization_guidance"
     assert result["answer_id"] == "K-FAQ-AUTHORIZATION-001"
+    assert router.questions == []
+
+
+def test_public_personal_data_change_guidance_bypasses_sensitive_risk_router() -> None:
+    base_document = published_document()
+    document = KnowledgeDocument(
+        item=base_document.item.model_copy(
+            update={
+                "knowledge_id": "K-FAQ-7A4F2A2F-66-R49",
+                "title": "修改個人基本資料",
+                "standard_answer": "請在國泰證券 App 的「我的」中選擇「個資變更」。",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="personal-data-change",
+                        question_text="修改個人基本資料",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base_document.source,
+    )
+    router = StaticIntentRouter(
+        candidate_intents=["unknown"],
+        risk_flags=["credential_or_sensitive_data"],
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    result = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "如何修改個人基本資料？", "channel": "web"},
+    ).json()["result"]
+
+    assert result["decision"] == "answer"
+    assert result["intent"] == "personal_data_change_guidance"
+    assert result["answer_id"] == "K-FAQ-7A4F2A2F-66-R49"
+    assert router.questions == []
+
+
+def test_personal_data_change_execution_request_still_hands_off() -> None:
+    router = StaticIntentRouter(candidate_intents=["app_public_help"])
+    service = TurnService(intent_router_mode="controlled", intent_router=router)
+
+    result = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "請幫我修改個人基本資料", "channel": "web"},
+    ).json()["result"]
+
+    assert result["decision"] == "handoff"
+    assert result["intent"] == "personal_data_change"
+    assert router.questions == []
+
+
+def test_personal_data_change_question_with_sensitive_value_still_refuses() -> None:
+    secret = "A123456789"
+    router = StaticIntentRouter(candidate_intents=["app_public_help"])
+    service = TurnService(intent_router_mode="controlled", intent_router=router)
+
+    response = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={
+            "transcript": f"如何修改個人基本資料？我的身分證字號是 {secret}",
+            "channel": "web",
+        },
+    )
+    result = response.json()["result"]
+
+    assert result["decision"] == "refuse"
+    assert result["policy_rule_id"] == "PII-001"
+    assert secret not in response.text
     assert router.questions == []
 
 

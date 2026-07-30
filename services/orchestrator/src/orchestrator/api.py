@@ -36,17 +36,19 @@ from .service import TurnService
 from .shadow import ThreadedShadowAnswerRunner
 from .voice import (
     BARGE_IN_PRESETS,
+    VOICE_FAREWELL_MESSAGE,
     VoiceGreetingRequest,
     VoicePlaybackMetrics,
     VoiceReplyRequest,
     VoiceService,
+    is_call_ending_utterance,
     ndjson_event,
     realtime_asr_url,
     split_tts_text,
 )
 
 _PACKAGE_ROOT = Path(__file__).parent
-_PILOT_ASSET_VERSION = "20260729.3"
+_PILOT_ASSET_VERSION = "20260730.1"
 
 
 def _build_knowledge_retriever(
@@ -282,6 +284,7 @@ def create_app(
                 },
                 "asr_models": asr_models,
                 "asr_context": resolved_service.voice_asr_context(),
+                "asr_endpoint_grace_ms": resolved_settings.asr_endpoint_grace_ms,
                 "barge_in": {
                     "enabled": resolved_settings.barge_in_enabled,
                     "default_mode": resolved_settings.barge_in_default_mode,
@@ -294,6 +297,23 @@ def create_app(
     async def voice_respond(request: VoiceReplyRequest) -> StreamingResponse:
         if resolved_voice_service is None:
             raise HTTPException(503, "語音服務目前未啟用。")
+        if is_call_ending_utterance(request.transcript):
+            segments = split_tts_text(VOICE_FAREWELL_MESSAGE)
+
+            async def farewell_stream() -> AsyncIterator[bytes]:
+                yield ndjson_event({"type": "farewell", "speech_segments": segments})
+                async for event in resolved_voice_service.stream_answer(
+                    turn_id=f"voice-farewell-{uuid4()}",
+                    answer=VOICE_FAREWELL_MESSAGE,
+                ):
+                    yield event
+
+            return StreamingResponse(
+                farewell_stream(),
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-store"},
+            )
+
         turn = await run_in_threadpool(
             resolved_service.evaluate,
             TurnRequest(transcript=request.transcript, channel="voice"),
