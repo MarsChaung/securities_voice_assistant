@@ -29,6 +29,7 @@ const asrLiveText = document.querySelector("#asr-live-text");
 const conversationPanel = document.querySelector(".conversation-panel");
 const controlColumn = document.querySelector(".control-column");
 const desktopVoiceTestLayout = window.matchMedia("(min-width: 981px)");
+const VOICE_TEST_IDLE_TIMEOUT_MS = 8000;
 const voiceState = {
   config: null,
   stream: null,
@@ -55,6 +56,8 @@ const voiceState = {
   preRollSamples: 0,
   endpointTimer: null,
   pendingEndpointTranscript: "",
+  idleTimer: null,
+  idlePromptStage: 0,
   subtitleNodes: [],
   callStartedAt: null,
   callTimer: null,
@@ -108,6 +111,27 @@ function resumePendingAsrEndpoint(nextText = "") {
   voiceState.partialTranscript = mergeAsrTranscripts(pending, nextText);
   setVoiceStatus("偵測到你繼續說話，已取消送出並持續聆聽…");
   return true;
+}
+
+function clearVoiceIdleTimer() {
+  if (voiceState.idleTimer !== null) clearTimeout(voiceState.idleTimer);
+  voiceState.idleTimer = null;
+}
+
+function scheduleVoiceIdleTimer() {
+  clearVoiceIdleTimer();
+  if (
+    !voiceTestMode
+    || !voiceState.continuous
+    || !voiceState.listening
+    || voiceState.replying
+  ) {
+    return;
+  }
+  voiceState.idleTimer = setTimeout(() => {
+    voiceState.idleTimer = null;
+    void handleVoiceIdleTimeout();
+  }, VOICE_TEST_IDLE_TIMEOUT_MS);
 }
 
 function closeRealtimeAsr() {
@@ -670,10 +694,13 @@ function continueAfterIgnoredTranscript(status) {
     return;
   }
   setVoiceStatus(status);
-  if (voiceState.continuous) void startVoiceListening();
+  if (voiceState.continuous) {
+    void startVoiceListening({ preserveIdleStage: true });
+  }
 }
 
 function finalizeRealtimeTranscript(transcript) {
+  clearVoiceIdleTimer();
   voiceState.listening = false;
   stopRealtimeCapture();
   voiceButton.classList.remove("listening");
@@ -702,6 +729,7 @@ function finalizeRealtimeTranscript(transcript) {
   }
 
   if (voiceState.pendingBargeInMetrics) commitPendingBargeIn();
+  voiceState.idlePromptStage = 0;
   void submitVoiceTurn(transcript);
 }
 
@@ -739,6 +767,7 @@ function handleRealtimeAsrEvent(data) {
     }
     const partial = voiceState.partialTranscript.trim();
     if (partial) {
+      clearVoiceIdleTimer();
       setVoiceStatus(`辨識中：${partial.slice(-36)}`);
       setAsrLive(partial);
     }
@@ -748,6 +777,9 @@ function handleRealtimeAsrEvent(data) {
     const partial = VoiceBargeIn.sanitizeAsrTranscript(data.text).trim();
     if (!resumePendingAsrEndpoint(partial)) {
       voiceState.partialTranscript = partial;
+    }
+    if (VoiceBargeIn.hasMeaningfulTranscript(voiceState.partialTranscript)) {
+      clearVoiceIdleTimer();
     }
     setVoiceStatus(`辨識中：${voiceState.partialTranscript.slice(-36)}`);
     setAsrLive(voiceState.partialTranscript);
@@ -760,12 +792,16 @@ function handleRealtimeAsrEvent(data) {
     if (!resumePendingAsrEndpoint(candidate)) {
       voiceState.partialTranscript = candidate;
     }
+    if (VoiceBargeIn.hasMeaningfulTranscript(voiceState.partialTranscript)) {
+      clearVoiceIdleTimer();
+    }
     setVoiceStatus(
       data.semantic_complete ? "正在確認你是否說完…" : "句子似乎還沒說完，持續聆聽中…",
     );
     return;
   }
   if (data.type === "speech_start") {
+    clearVoiceIdleTimer();
     resumePendingAsrEndpoint();
     if (voiceState.replying && voiceState.bargeInStreaming) {
       voiceState.bargeInDetector?.markSpeech();
@@ -773,6 +809,7 @@ function handleRealtimeAsrEvent(data) {
     return;
   }
   if (data.type === "speech_resumed") {
+    clearVoiceIdleTimer();
     resumePendingAsrEndpoint();
     setVoiceStatus("偵測到你繼續說話，持續聆聽中…");
     return;
@@ -785,9 +822,11 @@ function handleRealtimeAsrEvent(data) {
     voiceState.partialTranscript = "";
     setVoiceStatus("已忽略短暫環境音，持續聆聽中…");
     setAsrLive("已忽略短暫環境音，等待有效語音…");
+    scheduleVoiceIdleTimer();
     return;
   }
   if (data.type === "utterance_end" && voiceState.listening) {
+    clearVoiceIdleTimer();
     const accumulated = mergeAsrTranscripts(
       voiceState.pendingEndpointTranscript,
       voiceState.partialTranscript,
@@ -871,8 +910,9 @@ async function ensureRealtimeAsr() {
   return voiceState.socketPromise;
 }
 
-async function startVoiceListening() {
+async function startVoiceListening({ preserveIdleStage = false } = {}) {
   try {
+    clearVoiceIdleTimer();
     clearPendingAsrEndpoint();
     asrModelSelect.disabled = true;
     bargeInModeSelect.disabled = true;
@@ -880,6 +920,7 @@ async function startVoiceListening() {
     setVoiceStatus("正在準備即時語音辨識…");
     await ensureRealtimeAsr();
     if (!voiceState.continuous) return;
+    if (!preserveIdleStage) voiceState.idlePromptStage = 0;
     disarmBargeIn();
     voiceState.partialTranscript = "";
     voiceState.listening = true;
@@ -889,13 +930,16 @@ async function startVoiceListening() {
     setVoiceStatus("正在聽…自然說完一句話即可");
     updateCallControls("active");
     startRealtimeCapture();
+    scheduleVoiceIdleTimer();
   } catch (error) {
     stopVoiceSession(`無法啟動語音：${error.message}`);
   }
 }
 
 function stopVoiceSession(status = "語音對話已停止；按麥克風可重新開始") {
+  clearVoiceIdleTimer();
   clearPendingAsrEndpoint();
+  voiceState.idlePromptStage = 0;
   voiceState.continuous = false;
   voiceState.listening = false;
   voiceState.replying = false;
@@ -930,6 +974,7 @@ async function playVoiceResponse(response, signal) {
   let completed = false;
   let greetingResponse = false;
   let farewellResponse = false;
+  let idlePromptResponse = false;
   let responseSubtitleNodes = [];
 
   const prepareScheduler = (characterCount) => {
@@ -961,12 +1006,22 @@ async function playVoiceResponse(response, signal) {
       setVoiceStatus("文字回答完成，正在產生語音…可直接說話中斷");
       return;
     }
-    if (event.type === "greeting" || event.type === "farewell") {
+    if (
+      event.type === "greeting"
+      || event.type === "farewell"
+      || event.type === "idle_prompt"
+    ) {
       const segments = event.speech_segments || [];
-      const isFarewell = event.type === "farewell";
+      const isIdlePrompt = event.type === "idle_prompt";
+      const isFarewell = event.type === "farewell" || Boolean(event.ends_call);
+      document.querySelector("#voice-loading-message")?.remove();
       appendAssistantMessage(
         {
-          turn_id: isFarewell ? "voice-call-farewell" : "voice-test-greeting",
+          turn_id: isFarewell
+            ? "voice-call-farewell"
+            : isIdlePrompt
+              ? "voice-idle-check-in"
+              : "voice-test-greeting",
           result: {
             decision: "answer",
             answer: segments.join(""),
@@ -976,16 +1031,27 @@ async function playVoiceResponse(response, signal) {
         false,
         {
           progressiveSegments: segments,
-          label: isFarewell ? "AI 客服・結束語" : "AI 客服・招呼語",
+          label: isFarewell
+            ? "AI 客服・結束語"
+            : isIdlePrompt
+              ? "AI 客服・確認提示"
+              : "AI 客服・招呼語",
           showDecision: false,
         },
       );
       responseSubtitleNodes = [...voiceState.subtitleNodes];
       prepareScheduler(segments.join("").length);
       contentReceived = true;
-      greetingResponse = !isFarewell;
+      greetingResponse = !isFarewell && !isIdlePrompt;
       farewellResponse = isFarewell;
-      setVoiceStatus(isFarewell ? "正在產生結束語音…" : "正在產生招呼語音…");
+      idlePromptResponse = isIdlePrompt && !isFarewell;
+      setVoiceStatus(
+        isFarewell
+          ? "正在產生結束語音…"
+          : isIdlePrompt
+            ? "正在產生確認提示語音…"
+            : "正在產生招呼語音…",
+      );
       return;
     }
     if (event.type === "error") {
@@ -1011,6 +1077,8 @@ async function playVoiceResponse(response, signal) {
       updateCallControls("speaking");
       const playbackLabel = farewellResponse
         ? "結束語"
+        : idlePromptResponse
+          ? "確認提示"
         : greetingResponse
           ? "招呼語"
           : "語音回答";
@@ -1039,6 +1107,8 @@ async function playVoiceResponse(response, signal) {
     if (audioReceived && scheduler) {
       const playbackLabel = farewellResponse
         ? "結束語"
+        : idlePromptResponse
+          ? "確認提示"
         : greetingResponse
           ? "招呼語"
           : "語音回答";
@@ -1064,7 +1134,72 @@ async function playVoiceResponse(response, signal) {
   return { endsCall: farewellResponse };
 }
 
+async function handleVoiceIdleTimeout() {
+  if (
+    !voiceTestMode
+    || !voiceState.continuous
+    || !voiceState.listening
+    || voiceState.replying
+  ) {
+    return;
+  }
+
+  const stage = voiceState.idlePromptStage === 0 ? "check_in" : "farewell";
+  if (stage === "check_in") voiceState.idlePromptStage = 1;
+  clearPendingAsrEndpoint();
+  voiceState.listening = false;
+  stopRealtimeCapture();
+  voiceButton.classList.remove("listening");
+  voiceButton.classList.add("speaking");
+  updateCallControls("speaking");
+  setAsrLive(
+    stage === "check_in"
+      ? "8 秒內沒有辨識到有效問句。"
+      : "再次等待 8 秒後仍沒有辨識到有效問句。",
+  );
+  setVoiceStatus(
+    stage === "check_in" ? "準備播放確認提示…" : "準備播放通話結束語…",
+  );
+
+  const controller = new AbortController();
+  voiceState.replyController = controller;
+  voiceState.replying = true;
+  voiceState.replyDisplayed = false;
+  try {
+    const response = await fetch("/v1/voice/idle-prompt-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+      body: JSON.stringify({ stage }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error("等待提示語音服務目前無法使用。");
+    const outcome = await playVoiceResponse(response, controller.signal);
+    if (outcome.endsCall) {
+      stopVoiceSession("等待逾時，本次通話已自動結束");
+      setAsrLive("本次通話已自動結束。");
+      return;
+    }
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      stopVoiceSession(`等待提示播放失敗：${error.message}`);
+    }
+    return;
+  } finally {
+    if (voiceState.replyController === controller) {
+      voiceState.replyController = null;
+      voiceState.replying = false;
+      voiceButton.classList.remove("speaking");
+    }
+  }
+
+  if (voiceState.continuous && !controller.signal.aborted) {
+    await startVoiceListening({ preserveIdleStage: true });
+  }
+}
+
 async function submitVoiceTurn(transcript) {
+  clearVoiceIdleTimer();
+  voiceState.idlePromptStage = 0;
   if (!transcript) {
     setVoiceStatus("沒有辨識到語音，請再說一次。");
     if (voiceState.continuous) await startVoiceListening();

@@ -237,7 +237,7 @@ class TurnService:
                 decision=Decision.HANDOFF,
                 intent=policy_result.intent,
                 policy_rule_id=policy_result.policy_rule_id,
-                answer="這項需求需要由人工協助，請透過證券公司的官方客服管道辦理。",
+                answer="很抱歉，這項需求必須由客服協助處理。",
                 confidence=policy_result.confidence,
             )
         elif policy_result.action is PolicyAction.REFUSE:
@@ -245,10 +245,7 @@ class TurnService:
                 decision=Decision.REFUSE,
                 intent=policy_result.intent,
                 policy_rule_id=policy_result.policy_rule_id,
-                answer=(
-                    "這項需求不在本服務可回答的範圍內。"
-                    "本服務不處理交易、個人帳務或投資建議，請使用官方管道。"
-                ),
+                answer="很抱歉，這項需求不在本服務可回答的範圍內。",
                 confidence=policy_result.confidence,
             )
         else:

@@ -37,7 +37,10 @@ from .shadow import ThreadedShadowAnswerRunner
 from .voice import (
     BARGE_IN_PRESETS,
     VOICE_FAREWELL_MESSAGE,
+    VOICE_IDLE_CHECK_IN_MESSAGE,
+    VOICE_IDLE_FAREWELL_MESSAGE,
     VoiceGreetingRequest,
+    VoiceIdlePromptRequest,
     VoicePlaybackMetrics,
     VoiceReplyRequest,
     VoiceService,
@@ -48,7 +51,7 @@ from .voice import (
 )
 
 _PACKAGE_ROOT = Path(__file__).parent
-_PILOT_ASSET_VERSION = "20260730.1"
+_PILOT_ASSET_VERSION = "20260731.2"
 
 
 def _build_knowledge_retriever(
@@ -354,6 +357,39 @@ def create_app(
             async for event in resolved_voice_service.stream_answer(
                 turn_id=f"voice-test-greeting-{uuid4()}",
                 answer=request.greeting,
+            ):
+                yield event
+
+        return StreamingResponse(
+            stream(),
+            media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/v1/voice/idle-prompt-stream")
+    async def voice_idle_prompt(
+        request: VoiceIdlePromptRequest,
+    ) -> StreamingResponse:
+        if resolved_voice_service is None:
+            raise HTTPException(503, "語音服務目前未啟用。")
+        ends_call = request.stage == "farewell"
+        message = (
+            VOICE_IDLE_FAREWELL_MESSAGE if ends_call else VOICE_IDLE_CHECK_IN_MESSAGE
+        )
+        segments = split_tts_text(message)
+
+        async def stream() -> AsyncIterator[bytes]:
+            yield ndjson_event(
+                {
+                    "type": "idle_prompt",
+                    "stage": request.stage,
+                    "ends_call": ends_call,
+                    "speech_segments": segments,
+                }
+            )
+            async for event in resolved_voice_service.stream_answer(
+                turn_id=f"voice-idle-{request.stage}-{uuid4()}",
+                answer=message,
             ):
                 yield event
 

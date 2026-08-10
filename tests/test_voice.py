@@ -16,6 +16,8 @@ from orchestrator.config import Settings
 from orchestrator.service import TurnService
 from orchestrator.voice import (
     VOICE_FAREWELL_MESSAGE,
+    VOICE_IDLE_CHECK_IN_MESSAGE,
+    VOICE_IDLE_FAREWELL_MESSAGE,
     VoiceService,
     extract_wav_frames,
     is_call_ending_utterance,
@@ -115,7 +117,15 @@ def test_voice_helpers_preserve_realtime_url_and_complete_wav_frames() -> None:
 
 @pytest.mark.parametrize(
     "transcript",
-    ["沒問題了", "沒事了。", "再見", "謝謝，再見", "先這樣，謝謝"],
+    [
+        "沒問題了",
+        "沒事了。",
+        "再見",
+        "謝謝，再見",
+        "先這樣，謝謝",
+        "好，沒事的，拜拜。",
+        "沒事了，拜拜。",
+    ],
 )
 def test_call_ending_utterance_recognises_explicit_closings(transcript: str) -> None:
     assert is_call_ending_utterance(transcript) is True
@@ -311,6 +321,77 @@ def test_voice_endpoint_streams_fixed_farewell_for_call_ending_utterance() -> No
     }
     assert events[1]["type"] == "audio"
     assert events[-1]["type"] == "done"
+
+
+@pytest.mark.parametrize(
+    ("stage", "message", "ends_call"),
+    [
+        ("check_in", VOICE_IDLE_CHECK_IN_MESSAGE, False),
+        ("farewell", VOICE_IDLE_FAREWELL_MESSAGE, True),
+    ],
+)
+def test_voice_idle_prompt_streams_only_governed_messages(
+    stage: str,
+    message: str,
+    ends_call: bool,
+) -> None:
+    frame = make_wav_frame()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["input"] == message
+        return httpx.Response(200, content=frame)
+
+    voice = voice_service(httpx.MockTransport(handler))
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(service=TurnService(), settings=settings, voice_service=voice)
+    ) as client:
+        response = client.post(
+            "/v1/voice/idle-prompt-stream",
+            json={"stage": stage},
+        )
+
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert events[0] == {
+        "type": "idle_prompt",
+        "stage": stage,
+        "ends_call": ends_call,
+        "speech_segments": [message],
+    }
+    assert events[1]["type"] == "audio"
+    assert events[-1]["type"] == "done"
+
+
+def test_voice_idle_prompt_rejects_unknown_stage() -> None:
+    voice = voice_service(httpx.MockTransport(lambda request: httpx.Response(200)))
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(service=TurnService(), settings=settings, voice_service=voice)
+    ) as client:
+        response = client.post(
+            "/v1/voice/idle-prompt-stream",
+            json={"stage": "say_anything"},
+        )
+
+    assert response.status_code == 422
 
 
 def test_development_voice_test_can_stream_an_unsaved_greeting() -> None:

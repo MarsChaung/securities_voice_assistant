@@ -54,6 +54,8 @@ BARGE_IN_PRESETS: tuple[dict[str, str | int | float], ...] = (
 )
 
 VOICE_FAREWELL_MESSAGE = "謝謝您的來電，祝您順心，再見"
+VOICE_IDLE_CHECK_IN_MESSAGE = "還有什麼事可以協助您的嗎?"
+VOICE_IDLE_FAREWELL_MESSAGE = "很高興為你服務，歡迎您再度來電，再見。"
 _CALL_ENDING_UTTERANCES = frozenset(
     {
         "沒問題了",
@@ -81,7 +83,14 @@ def realtime_asr_url(audio_public_base_url: str) -> str:
 
 def is_call_ending_utterance(text: str) -> bool:
     compact = re.sub(r"[\s，,、。！？!?；;：:]+", "", text).casefold()
-    return compact in _CALL_ENDING_UTTERANCES
+    if compact in _CALL_ENDING_UTTERANCES:
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?:好)?(?:沒(?:有)?問題了?|沒事(?:了|的)?)(?:拜拜|掰掰|再見)?",
+            compact,
+        )
+    )
 
 
 def split_tts_text(
@@ -161,6 +170,12 @@ class VoiceGreetingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     greeting: str = Field(min_length=1, max_length=300)
+
+
+class VoiceIdlePromptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage: Literal["check_in", "farewell"]
 
 
 class VoicePlaybackChunkMetric(BaseModel):

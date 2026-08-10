@@ -219,6 +219,11 @@ def test_voice_customer_service_test_page_is_served() -> None:
     assert "asr_endpoint_grace_ms" in script.text
     assert "shouldResumePlaybackAfterBargeIn" in script.text
     assert 'event.type === "farewell"' in script.text
+    assert "VOICE_TEST_IDLE_TIMEOUT_MS = 8000" in script.text
+    assert "/v1/voice/idle-prompt-stream" in script.text
+    assert script.text.count(
+        'document.querySelector("#voice-loading-message")?.remove();'
+    ) == 3
 
 
 def test_feedback_endpoint_logs_only_allowlisted_metadata(
@@ -287,6 +292,7 @@ def test_transaction_request_is_refused_before_knowledge_lookup() -> None:
     assert result["decision"] == "refuse"
     assert result["intent"] == "transaction_request"
     assert result["policy_rule_id"] == "POL-REFUSE-001"
+    assert result["answer"] == "很抱歉，這項需求不在本服務可回答的範圍內。"
 
 
 def test_order_entry_tutorial_is_allowed_but_still_requires_approved_knowledge() -> None:
@@ -913,6 +919,7 @@ def test_personal_data_change_execution_request_still_hands_off() -> None:
 
     assert result["decision"] == "handoff"
     assert result["intent"] == "personal_data_change"
+    assert result["answer"] == "很抱歉，這項需求必須由客服協助處理。"
     assert router.questions == []
 
 
