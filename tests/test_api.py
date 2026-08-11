@@ -8,9 +8,15 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from answer_contract import TurnRequest
 from orchestrator.answering import AnswerEvidence, AnswerGenerationError, GeneratedAnswer
 from orchestrator.api import create_app
 from orchestrator.config import Settings
+from orchestrator.conversation import (
+    ConversationExchange,
+    ConversationResolution,
+    FollowUpKind,
+)
 from orchestrator.intent_routing import (
     IntentClassification,
     IntentRouteResult,
@@ -27,6 +33,7 @@ from retrieval import (
     LocalKnowledgeRepository,
     QuestionVariant,
     QuestionVariantUsage,
+    RetrievalMatch,
 )
 
 ROOT = Path(__file__).parents[1]
@@ -56,6 +63,60 @@ class MatchingEmbeddingProvider:
         raise KnowledgeRepositoryError("database unavailable")
 
 
+class ConversationAwareRetriever:
+    def __init__(
+        self,
+        *,
+        original_match: RetrievalMatch | None,
+        contextual_match: RetrievalMatch | None,
+        reference_match: RetrievalMatch | None,
+    ) -> None:
+        self.original_match = original_match
+        self.contextual_match = contextual_match
+        self.reference_match = reference_match
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def search(
+        self,
+        *,
+        query: str,
+        intent: str,
+        documents: Sequence[KnowledgeDocument],
+    ) -> RetrievalMatch | None:
+        knowledge_ids = tuple(document.item.knowledge_id for document in documents)
+        self.calls.append((query, knowledge_ids))
+        if len(documents) == 1:
+            return self.reference_match
+        if query == "若銷戶後3個月，可以再線上開戶嗎?":
+            return self.original_match
+        return self.contextual_match
+
+
+class NewQuestionReferenceRetriever:
+    def __init__(
+        self,
+        *,
+        original_match: RetrievalMatch | None,
+        reference_match: RetrievalMatch | None,
+    ) -> None:
+        self.original_match = original_match
+        self.reference_match = reference_match
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def search(
+        self,
+        *,
+        query: str,
+        intent: str,
+        documents: Sequence[KnowledgeDocument],
+    ) -> RetrievalMatch | None:
+        knowledge_ids = tuple(document.item.knowledge_id for document in documents)
+        self.calls.append((query, knowledge_ids))
+        if len(documents) == 1:
+            return self.reference_match
+        return self.original_match
+
+
 class StaticAnswerComposer:
     def __init__(self, answer: str | None = None, *, fail: bool = False) -> None:
         self.answer = answer
@@ -72,6 +133,47 @@ class StaticAnswerComposer:
             prompt_version="controlled-answer-v4",
             prompt_hash="a" * 64,
             latency_ms=12.5,
+        )
+
+
+class StaticNaturalAnswerComposer:
+    def __init__(
+        self,
+        answer: str | None = None,
+        *,
+        fail: bool = False,
+        selected_segment_ids: tuple[str, ...] = (),
+    ) -> None:
+        self.answer = answer
+        self.fail = fail
+        self.selected_segment_ids = selected_segment_ids
+        self.calls: list[dict[str, object]] = []
+
+    def compose(
+        self,
+        evidence: AnswerEvidence,
+        *,
+        current_utterance: str,
+        follow_up_kind: FollowUpKind,
+        history: Sequence[ConversationExchange],
+    ) -> GeneratedAnswer:
+        self.calls.append(
+            {
+                "evidence": evidence,
+                "current_utterance": current_utterance,
+                "follow_up_kind": follow_up_kind,
+                "history": tuple(history),
+            }
+        )
+        if self.fail:
+            raise AnswerGenerationError("synthetic natural failure")
+        return GeneratedAnswer(
+            answer=self.answer or evidence.standard_answer,
+            model_id="synthetic-natural-model",
+            prompt_version="natural-conversation-answer-v1",
+            prompt_hash="c" * 64,
+            latency_ms=15.0,
+            selected_segment_ids=self.selected_segment_ids,
         )
 
 
@@ -207,6 +309,11 @@ def test_voice_customer_service_test_page_is_served() -> None:
     assert 'id="voice-button"' in page.text
     assert 'id="hangup-button"' in page.text
     assert 'id="greeting"' in page.text
+    assert 'id="reply-mode"' in page.text
+    assert 'id="session-id"' in page.text
+    assert 'id="copy-session-id"' in page.text
+    assert "Session ID" in page.text
+    assert "客服回答模式" in page.text
     assert "您好，我是 AI 語音客服，很高興為您服務。" in page.text
     assert "請問今天想了解什麼證券知識呢？" not in page.text
     assert "ASR 即時辨識" in page.text
@@ -221,9 +328,11 @@ def test_voice_customer_service_test_page_is_served() -> None:
     assert 'event.type === "farewell"' in script.text
     assert "VOICE_TEST_IDLE_TIMEOUT_MS = 8000" in script.text
     assert "/v1/voice/idle-prompt-stream" in script.text
-    assert script.text.count(
-        'document.querySelector("#voice-loading-message")?.remove();'
-    ) == 3
+    assert "/v1/voice/conversations/" in script.text
+    assert "/v1/voice/test-turns/evaluate" in script.text
+    assert "session_id: ensureVoiceTestSession()" in script.text
+    assert "conversation_id: ensureVoiceTestSession()" in script.text
+    assert script.text.count('document.querySelector("#voice-loading-message")?.remove();') == 3
 
 
 def test_feedback_endpoint_logs_only_allowlisted_metadata(
@@ -380,10 +489,14 @@ def test_voice_governed_alias_recovery_is_auditable() -> None:
         clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
     )
 
-    result = make_client(service).post(
-        "/v1/turns/evaluate",
-        json={"transcript": "什麼是甲竹全席", "channel": "voice"},
-    ).json()["result"]
+    result = (
+        make_client(service)
+        .post(
+            "/v1/turns/evaluate",
+            json={"transcript": "什麼是甲竹全席", "channel": "voice"},
+        )
+        .json()["result"]
+    )
 
     assert result["decision"] == "answer"
     assert result["policy_rule_id"] == "ASR-ALIAS-001"
@@ -539,9 +652,425 @@ def test_controlled_generation_preserves_approved_knowledge_identity() -> None:
     assert result["knowledge_versions"] == [document.item.version]
     assert composer.evidence is not None
     assert composer.evidence.standard_answer == document.item.standard_answer
-    assert composer.evidence.prohibited_extensions == tuple(
-        document.item.prohibited_extensions
+    assert composer.evidence.prohibited_extensions == tuple(document.item.prohibited_extensions)
+
+
+def test_natural_generation_uses_conversation_and_preserves_knowledge_identity() -> None:
+    document = published_document()
+    composer = StaticNaturalAnswerComposer(answer="簡單來說，您可以依核准流程辦理。")
+    history = (
+        ConversationExchange(
+            user_utterance="什麼是台股定期定額？",
+            resolved_query="什麼是台股定期定額？",
+            assistant_answer=document.item.standard_answer,
+            decision="answer",
+            knowledge_id=document.item.knowledge_id,
+            knowledge_version=document.item.version,
+        ),
     )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=composer,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="剛才那一段再說詳細一點",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query="什麼是台股定期定額？；使用者追問：剛才那一段再說詳細一點",
+            history=history,
+        ),
+    )
+
+    result = response.result
+    assert result.decision.value == "answer"
+    assert result.answer == "簡單來說，您可以依核准流程辦理。"
+    assert result.answer_id == document.item.knowledge_id
+    assert result.knowledge_versions == [document.item.version]
+    assert composer.calls[0]["current_utterance"] == "剛才那一段再說詳細一點"
+    assert composer.calls[0]["follow_up_kind"] is FollowUpKind.ELABORATE
+    assert composer.calls[0]["history"] == history
+
+
+def test_natural_new_question_does_not_send_prior_history_to_answer_model(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    document = published_document()
+    composer = StaticNaturalAnswerComposer(answer="這是本輪新問題的精簡回答。")
+    history = (
+        ConversationExchange(
+            user_utterance="如何修改個人基本資料？",
+            resolved_query="如何修改個人基本資料？",
+            assistant_answer="請依核准流程辦理。",
+            decision="answer",
+            knowledge_id="K-OTHER",
+            knowledge_version="1.0",
+        ),
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=composer,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    with caplog.at_level(logging.INFO, logger="sva.audit"):
+        service.evaluate(
+            request=TurnRequest(
+                transcript="什麼是台股定期定額？",
+                channel="voice",
+            ),
+            conversation=ConversationResolution(
+                kind=FollowUpKind.NEW_QUESTION,
+                retrieval_query="什麼是台股定期定額？",
+                history=history,
+                resolution_latency_ms=12.5,
+                semantic_latency_ms=8.0,
+            ),
+        )
+
+    assert composer.calls[0]["history"] == ()
+    event_record = next(
+        record for record in caplog.records if "turn_decision" in record.message
+    )
+    event = json.loads(event_record.getMessage().removeprefix("turn_decision "))
+    assert event["conversation_resolution_latency_ms"] == 12.5
+    assert event["conversation_semantic_latency_ms"] == 8.0
+    assert event["policy_guard_latency_ms"] >= 0
+    assert event["retrieval_latency_ms"] >= 0
+    assert event["generation_latency_ms"] == 15.0
+    assert event["end_to_end_latency_ms"] >= event["total_latency_ms"] + 12.4
+
+
+def test_natural_generation_failure_falls_back_to_exact_approved_answer() -> None:
+    document = published_document()
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=StaticNaturalAnswerComposer(fail=True),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="什麼是台股定期定額？",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.NEW_QUESTION,
+            retrieval_query="什麼是台股定期定額？",
+            history=(),
+        ),
+    )
+
+    assert response.result.answer == document.item.standard_answer
+
+
+def test_natural_focused_follow_up_falls_back_to_relevant_approved_excerpt() -> None:
+    base = published_document()
+    focused_answer = (
+        "一、線上申請（交易日上午8點15分至下午2點）\n"
+        "二、臨櫃申請時間為週一至週五上午08:30至下午16:30。"
+    )
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "standard_answer": (
+                    "你可以線上或臨櫃申請。\n"
+                    f"{focused_answer}\n"
+                    "完成後6個月內無法線上申請。"
+                )
+            }
+        ),
+        source=base.source,
+    )
+    composer = StaticNaturalAnswerComposer(
+        answer="辦理時間是上午8點15分到下午3點。"
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=composer,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    history = (
+        ConversationExchange(
+            user_utterance="什麼是台股定期定額？",
+            resolved_query="什麼是台股定期定額？",
+            assistant_answer=document.item.standard_answer,
+            decision="answer",
+            knowledge_id=document.item.knowledge_id,
+            knowledge_version=document.item.version,
+        ),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="剛剛沒聽清楚，辦理時間是幾點到幾點？",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query=(
+                "什麼是台股定期定額？；使用者追問：辦理時間是幾點到幾點？"
+            ),
+            history=history,
+            reference_knowledge_id=document.item.knowledge_id,
+        ),
+    )
+
+    assert response.result.answer == focused_answer
+    evidence = composer.calls[0]["evidence"]
+    assert isinstance(evidence, AnswerEvidence)
+    assert evidence.standard_answer == focused_answer
+
+
+def test_natural_semantic_focus_uses_selected_governed_segments_for_fallback() -> None:
+    base = published_document()
+    selected_answer = (
+        "銷戶完成日後6個月內，無法線上開戶。\n"
+        "若6個月內有開戶需求，需要到證券分公司臨櫃辦理。"
+    )
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "standard_answer": (
+                    "你可以線上或臨櫃申請註銷證券帳戶。\n"
+                    f"{selected_answer}"
+                )
+            }
+        ),
+        source=base.source,
+    )
+    composer = StaticNaturalAnswerComposer(
+        answer=(
+            "不可以。銷戶後3個月仍在6個月限制內，需要到證券分公司臨櫃辦理。"
+        ),
+        selected_segment_ids=("S2", "S3"),
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=composer,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="若銷戶後3個月，可以再線上開戶嗎?",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query="如何開戶；證券帳戶銷戶後3個月是否可以再次線上開戶",
+            history=(),
+            reference_knowledge_id=document.item.knowledge_id,
+            focus="銷戶後重新開戶的限制期間",
+            semantic_confidence=0.96,
+            semantic_applied=True,
+        ),
+    )
+
+    # 產生答案帶入使用者的 3 個月，會被數字護欄拒絕；安全回退只播放模型選定的核准段落。
+    assert response.result.answer == selected_answer
+
+
+def test_conversation_retrieval_combines_original_context_and_recent_knowledge() -> None:
+    base = published_document()
+    reference_document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-ACCOUNT-CLOSE",
+                "title": "註銷證券帳戶",
+                "standard_answer": "銷戶完成日後6個月內，無法線上開戶。",
+            }
+        ),
+        source=base.source,
+    )
+    generic_document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-ONLINE-OPEN",
+                "title": "線上開戶",
+                "standard_answer": "可依公開流程申請線上開戶。",
+            }
+        ),
+        source=base.source,
+    )
+    retriever = ConversationAwareRetriever(
+        original_match=RetrievalMatch(document=generic_document, score=0.96),
+        contextual_match=RetrievalMatch(document=reference_document, score=0.41),
+        reference_match=RetrievalMatch(document=reference_document, score=0.41),
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository(
+            (reference_document, generic_document)
+        ),
+        knowledge_retriever=retriever,
+        natural_answer_composer=StaticNaturalAnswerComposer(),
+        intent_router_mode="controlled",
+        intent_router=StaticIntentRouter(candidate_intents=["account_opening_general"]),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="若銷戶後3個月，可以再線上開戶嗎?",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query="如何開戶；註銷證券帳戶後3個月是否可以再次線上開戶",
+            history=(),
+            reference_knowledge_id=reference_document.item.knowledge_id,
+            semantic_confidence=0.96,
+            semantic_applied=True,
+        ),
+    )
+
+    assert response.result.answer_id == "K-ACCOUNT-CLOSE"
+    assert [query for query, _ in retriever.calls] == [
+        "若銷戶後3個月，可以再線上開戶嗎?",
+        "如何開戶；註銷證券帳戶後3個月是否可以再次線上開戶",
+    ]
+
+
+def test_semantic_new_question_can_recover_a_competitive_recent_knowledge_match() -> None:
+    base = published_document()
+    closure_document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-ACCOUNT-CLOSE",
+                "title": "註銷證券帳戶",
+                "standard_answer": "銷戶完成日後6個月內，無法線上開戶。",
+            }
+        ),
+        source=base.source,
+    )
+    online_opening_document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-ONLINE-OPEN",
+                "title": "線上開戶",
+                "standard_answer": "可使用App依公開流程申請線上開戶。",
+            }
+        ),
+        source=base.source,
+    )
+    retriever = NewQuestionReferenceRetriever(
+        original_match=RetrievalMatch(document=online_opening_document, score=0.55),
+        reference_match=RetrievalMatch(document=closure_document, score=0.52),
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository(
+            (closure_document, online_opening_document)
+        ),
+        knowledge_retriever=retriever,
+        natural_answer_composer=StaticNaturalAnswerComposer(),
+        intent_router_mode="controlled",
+        intent_router=StaticIntentRouter(candidate_intents=["account_opening_general"]),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    history = (
+        ConversationExchange(
+            user_utterance="線上申請銷戶要怎麼操作",
+            resolved_query="註銷證券帳戶要怎麼辦理；線上申請銷戶要怎麼操作",
+            assistant_answer="請依核准流程線上申請。",
+            decision="answer",
+            knowledge_id=closure_document.item.knowledge_id,
+            knowledge_version=closure_document.item.version,
+        ),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="若銷戶後3個月，可以再線上開戶嗎?",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.NEW_QUESTION,
+            retrieval_query="若銷戶後3個月，可以再線上開戶嗎?",
+            history=history,
+            semantic_confidence=0.95,
+        ),
+    )
+
+    assert response.result.answer_id == closure_document.item.knowledge_id
+
+
+def test_semantic_new_question_does_not_stick_to_a_weak_recent_topic() -> None:
+    base = published_document()
+    recent_document = base
+    new_topic_document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-DAY-TRADING",
+                "title": "現股當沖",
+                "standard_answer": "符合核准資格後可申請現股當沖。",
+            }
+        ),
+        source=base.source,
+    )
+    retriever = NewQuestionReferenceRetriever(
+        original_match=RetrievalMatch(document=new_topic_document, score=0.75),
+        reference_match=RetrievalMatch(document=recent_document, score=0.4),
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository(
+            (recent_document, new_topic_document)
+        ),
+        knowledge_retriever=retriever,
+        natural_answer_composer=StaticNaturalAnswerComposer(),
+        intent_router_mode="controlled",
+        intent_router=StaticIntentRouter(candidate_intents=["account_opening_general"]),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    history = (
+        ConversationExchange(
+            user_utterance="註銷證券帳戶要怎麼辦理",
+            resolved_query="註銷證券帳戶要怎麼辦理",
+            assistant_answer=recent_document.item.standard_answer,
+            decision="answer",
+            knowledge_id=recent_document.item.knowledge_id,
+            knowledge_version=recent_document.item.version,
+        ),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(transcript="怎麼申請現股當沖", channel="voice"),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.NEW_QUESTION,
+            retrieval_query="怎麼申請現股當沖",
+            history=history,
+            semantic_confidence=0.95,
+        ),
+    )
+
+    assert response.result.answer_id == new_topic_document.item.knowledge_id
+
+
+def test_natural_conversation_never_overrides_hard_policy_refusal() -> None:
+    composer = StaticNaturalAnswerComposer(answer="不應使用的回答")
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((published_document(),)),
+        natural_answer_composer=composer,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="那請幫我買進台積電",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query="什麼是台股定期定額？；使用者追問：請幫我買進台積電",
+            history=(),
+        ),
+    )
+
+    assert response.result.policy_rule_id == "POL-REFUSE-001"
+    assert composer.calls == []
 
 
 def test_controlled_generation_error_falls_back_to_exact_approved_answer() -> None:
@@ -813,10 +1342,14 @@ def test_public_password_reissue_guidance_bypasses_credential_risk_router(
         clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
     )
 
-    result = make_client(service).post(
-        "/v1/turns/evaluate",
-        json={"transcript": transcript, "channel": "web"},
-    ).json()["result"]
+    result = (
+        make_client(service)
+        .post(
+            "/v1/turns/evaluate",
+            json={"transcript": transcript, "channel": "web"},
+        )
+        .json()["result"]
+    )
 
     assert result["decision"] == "answer"
     assert result["intent"] == "credential_recovery_guidance"
@@ -855,10 +1388,14 @@ def test_public_account_authorization_guidance_bypasses_credential_risk_router()
         clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
     )
 
-    result = make_client(service).post(
-        "/v1/turns/evaluate",
-        json={"transcript": "怎麼把我的帳戶授權給別人", "channel": "web"},
-    ).json()["result"]
+    result = (
+        make_client(service)
+        .post(
+            "/v1/turns/evaluate",
+            json={"transcript": "怎麼把我的帳戶授權給別人", "channel": "web"},
+        )
+        .json()["result"]
+    )
 
     assert result["decision"] == "answer"
     assert result["intent"] == "account_authorization_guidance"
@@ -897,10 +1434,14 @@ def test_public_personal_data_change_guidance_bypasses_sensitive_risk_router() -
         clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
     )
 
-    result = make_client(service).post(
-        "/v1/turns/evaluate",
-        json={"transcript": "如何修改個人基本資料？", "channel": "web"},
-    ).json()["result"]
+    result = (
+        make_client(service)
+        .post(
+            "/v1/turns/evaluate",
+            json={"transcript": "如何修改個人基本資料？", "channel": "web"},
+        )
+        .json()["result"]
+    )
 
     assert result["decision"] == "answer"
     assert result["intent"] == "personal_data_change_guidance"
@@ -912,10 +1453,14 @@ def test_personal_data_change_execution_request_still_hands_off() -> None:
     router = StaticIntentRouter(candidate_intents=["app_public_help"])
     service = TurnService(intent_router_mode="controlled", intent_router=router)
 
-    result = make_client(service).post(
-        "/v1/turns/evaluate",
-        json={"transcript": "請幫我修改個人基本資料", "channel": "web"},
-    ).json()["result"]
+    result = (
+        make_client(service)
+        .post(
+            "/v1/turns/evaluate",
+            json={"transcript": "請幫我修改個人基本資料", "channel": "web"},
+        )
+        .json()["result"]
+    )
 
     assert result["decision"] == "handoff"
     assert result["intent"] == "personal_data_change"

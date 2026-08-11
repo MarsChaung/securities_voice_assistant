@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 from observability import SafeAuditLogger
 from orchestrator.api import create_app
 from orchestrator.config import Settings
+from orchestrator.conversation import ConversationContextStore, FollowUpKind
+from orchestrator.diagnostics import VoiceTestDiagnosticLogger
 from orchestrator.service import TurnService
 from orchestrator.voice import (
     VOICE_FAREWELL_MESSAGE,
@@ -25,7 +27,12 @@ from orchestrator.voice import (
     split_tts_text,
 )
 from retrieval import KnowledgeDocument, QuestionVariant, QuestionVariantUsage
-from test_api import StaticKnowledgeRepository, published_document
+from test_api import (
+    StaticIntentRouter,
+    StaticKnowledgeRepository,
+    StaticNaturalAnswerComposer,
+    published_document,
+)
 
 
 def make_wav_frame() -> bytes:
@@ -74,6 +81,15 @@ class CapturingPlaybackAuditLogger(SafeAuditLogger):
 
     def voice_playback(self, **metrics: object) -> None:
         self.events.append(metrics)
+
+
+class CapturingVoiceTestDiagnosticLogger(VoiceTestDiagnosticLogger):
+    def __init__(self) -> None:
+        super().__init__(enabled=True, app_env="development")
+        self.events: list[dict[str, object]] = []
+
+    def exchange(self, **event: object) -> None:
+        self.events.append(event)
 
 
 def voice_service(
@@ -203,9 +219,7 @@ def test_voice_service_streams_audio_and_logs_no_answer_text() -> None:
         return httpx.Response(200, content=frame)
 
     audit = CapturingVoiceAuditLogger()
-    service = voice_service(
-        httpx.MockTransport(handler), audit_logger=audit, voice_clone=True
-    )
+    service = voice_service(httpx.MockTransport(handler), audit_logger=audit, voice_clone=True)
     answer = "這是只應送往瀏覽器與地端 TTS 的核准答案。"
 
     async def collect() -> list[dict[str, object]]:
@@ -249,6 +263,7 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
         asr_model="mlx-community/Qwen3-ASR-1.7B-8bit",
         asr_candidate_model="mlx-community/whisper-large-v3-turbo-asr-fp16",
         tts_model="synthetic-tts",
+        voice_test_content_logging_enabled=False,
     )
 
     with TestClient(
@@ -273,6 +288,8 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert config.json()["barge_in"]["enabled"] is True
     assert config.json()["barge_in"]["default_mode"] == "standard"
     assert config.json()["asr_endpoint_grace_ms"] == 1200
+    assert config.json()["reply_modes"] == [{"id": "exact", "label": "核准原文"}]
+    assert config.json()["diagnostic_content_logging_enabled"] is False
     assert [preset["id"] for preset in config.json()["barge_in"]["presets"]] == [
         "sensitive",
         "standard",
@@ -286,6 +303,243 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert turn["result"]["policy_rule_id"] == "KNO-001"
     assert events[1]["type"] == "audio"
     assert events[-1]["type"] == "done"
+
+
+def test_voice_natural_mode_keeps_recent_context_and_can_be_cleared() -> None:
+    frame = make_wav_frame()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=frame)
+
+    document = published_document()
+    composer = StaticNaturalAnswerComposer(answer="我用比較口語的方式說明這項核准內容。")
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=composer,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    store = ConversationContextStore()
+    conversation_id = uuid4()
+    voice = voice_service(httpx.MockTransport(handler))
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(
+            service=service,
+            settings=settings,
+            voice_service=voice,
+            conversation_store=store,
+        )
+    ) as client:
+        config = client.get("/v1/voice/config")
+        first = client.post(
+            "/v1/voice/respond-stream",
+            json={
+                "transcript": "什麼是台股定期定額？",
+                "reply_mode": "natural",
+                "conversation_id": str(conversation_id),
+            },
+        )
+        second = client.post(
+            "/v1/voice/respond-stream",
+            json={
+                "transcript": "剛才那一段可以再說詳細一點嗎？",
+                "reply_mode": "natural",
+                "conversation_id": str(conversation_id),
+            },
+        )
+        cleared = client.delete(f"/v1/voice/conversations/{conversation_id}")
+
+    assert config.json()["reply_modes"] == [
+        {"id": "exact", "label": "核准原文"},
+        {"id": "natural", "label": "自然對話"},
+    ]
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(composer.calls) == 2
+    assert composer.calls[1]["follow_up_kind"] is FollowUpKind.ELABORATE
+    history = composer.calls[1]["history"]
+    assert isinstance(history, tuple)
+    assert len(history) == 1
+    assert cleared.status_code == 204
+    assert store.history(str(conversation_id)) == ()
+
+
+def test_voice_test_text_turn_uses_session_context_for_elliptical_follow_up() -> None:
+    base = published_document()
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-TEST-MINOR-001",
+                "title": "未成年人開戶",
+                "standard_answer": (
+                    "未成年人開戶須由父母或法定代理人陪同，並攜帶核准清單所列證件。"
+                ),
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="minor-account-opening",
+                        question_text="未成年怎麼開戶",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base.source,
+    )
+    composer = StaticNaturalAnswerComposer()
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=composer,
+        intent_router_mode="controlled",
+        intent_router=StaticIntentRouter(candidate_intents=["account_opening_general"]),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    store = ConversationContextStore()
+    session_id = uuid4()
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        app_env="development",
+    )
+
+    with TestClient(
+        create_app(
+            service=service,
+            settings=settings,
+            conversation_store=store,
+        )
+    ) as client:
+        first = client.post(
+            "/v1/voice/test-turns/evaluate",
+            json={
+                "transcript": "未成年怎麼開戶",
+                "reply_mode": "natural",
+                "session_id": str(session_id),
+            },
+        )
+        follow_up = client.post(
+            "/v1/voice/test-turns/evaluate",
+            json={
+                "transcript": "父母要帶什麼證件",
+                "reply_mode": "natural",
+                "session_id": str(session_id),
+            },
+        )
+
+    assert first.status_code == 200
+    assert first.json()["result"]["decision"] == "answer", first.text
+    assert follow_up.status_code == 200
+    assert follow_up.json()["result"]["decision"] == "answer", follow_up.text
+    assert len(composer.calls) == 2
+    assert composer.calls[1]["follow_up_kind"] is FollowUpKind.ELABORATE
+    history = composer.calls[1]["history"]
+    assert isinstance(history, tuple)
+    assert len(history) == 1
+
+
+def test_voice_test_text_turn_is_not_available_outside_development() -> None:
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        app_env="production",
+    )
+
+    with TestClient(create_app(service=TurnService(), settings=settings)) as client:
+        response = client.post(
+            "/v1/voice/test-turns/evaluate",
+            json={
+                "transcript": "未成年怎麼開戶",
+                "session_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 404
+
+
+def test_voice_test_text_turn_logs_session_and_dialogue_when_enabled() -> None:
+    session_id = uuid4()
+    diagnostic_logger = CapturingVoiceTestDiagnosticLogger()
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        app_env="development",
+    )
+
+    with TestClient(
+        create_app(
+            service=TurnService(),
+            settings=settings,
+            diagnostic_logger=diagnostic_logger,
+        )
+    ) as client:
+        response = client.post(
+            "/v1/voice/test-turns/evaluate",
+            json={
+                "transcript": "測試用問題",
+                "session_id": str(session_id),
+            },
+        )
+
+    event = diagnostic_logger.events[-1]
+    assert response.status_code == 200
+    assert event["session_id"] == str(session_id)
+    assert event["user_utterance"] == "測試用問題"
+    assert event["assistant_answer"] == response.json()["result"]["answer"]
+
+
+def test_voice_natural_mode_requires_conversation_id() -> None:
+    voice = voice_service(httpx.MockTransport(lambda request: httpx.Response(200)))
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(service=TurnService(), settings=settings, voice_service=voice)
+    ) as client:
+        response = client.post(
+            "/v1/voice/respond-stream",
+            json={"transcript": "請說明", "reply_mode": "natural"},
+        )
+
+    assert response.status_code == 422
+
+
+def test_voice_natural_mode_cannot_be_called_when_not_enabled() -> None:
+    voice = voice_service(httpx.MockTransport(lambda request: httpx.Response(200)))
+    settings = Settings(
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        voice_enabled=True,
+        asr_model="synthetic-asr",
+        tts_model="synthetic-tts",
+    )
+
+    with TestClient(
+        create_app(service=TurnService(), settings=settings, voice_service=voice)
+    ) as client:
+        response = client.post(
+            "/v1/voice/respond-stream",
+            json={
+                "transcript": "請說明",
+                "reply_mode": "natural",
+                "conversation_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 409
 
 
 def test_voice_endpoint_streams_fixed_farewell_for_call_ending_utterance() -> None:
@@ -492,9 +746,7 @@ def test_voice_endpoint_applies_phonetic_recovery_before_tts() -> None:
         tts_model="synthetic-tts",
     )
 
-    with TestClient(
-        create_app(service=service, settings=settings, voice_service=voice)
-    ) as client:
+    with TestClient(create_app(service=service, settings=settings, voice_service=voice)) as client:
         response = client.post(
             "/v1/voice/respond-stream",
             json={"transcript": "什麼是甲雛全息"},

@@ -135,6 +135,31 @@ button:disabled, select:disabled { cursor: not-allowed; opacity: 0.55; }
 h1, h2 { margin: 0; letter-spacing: -0.02em; }
 h1 { font-size: 27px; }
 h2 { font-size: 21px; }
+.session-meta {
+  margin-top: 9px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.session-meta code {
+  max-width: min(42vw, 310px);
+  overflow: hidden;
+  color: var(--green-dark);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-meta button {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 10px;
+}
 .call-state {
   display: flex;
   align-items: center;

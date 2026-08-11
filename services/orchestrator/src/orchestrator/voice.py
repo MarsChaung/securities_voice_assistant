@@ -8,11 +8,14 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from observability import SafeAuditLogger
+
+from .conversation import ReplyMode
 
 BARGE_IN_PRESETS: tuple[dict[str, str | int | float], ...] = (
     {
@@ -114,9 +117,7 @@ def split_tts_text(
 
         window = remaining[:hard_max_chars]
         candidates = [
-            index + 1
-            for index, character in enumerate(window)
-            if character in boundaries
+            index + 1 for index, character in enumerate(window) if character in boundaries
         ]
         cut = (
             min(
@@ -164,6 +165,22 @@ class VoiceReplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transcript: str = Field(min_length=1, max_length=4_000)
+    conversation_id: UUID | None = None
+    reply_mode: ReplyMode = ReplyMode.EXACT
+
+    @model_validator(mode="after")
+    def require_conversation_for_natural_mode(self) -> "VoiceReplyRequest":
+        if self.reply_mode is ReplyMode.NATURAL and self.conversation_id is None:
+            raise ValueError("自然對話模式必須提供 conversation_id")
+        return self
+
+
+class VoiceTestTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcript: str = Field(min_length=1, max_length=4_000)
+    session_id: UUID
+    reply_mode: ReplyMode = ReplyMode.EXACT
 
 
 class VoiceGreetingRequest(BaseModel):
@@ -361,9 +378,7 @@ class VoiceService:
             )
         buffer = b""
         try:
-            async with self._client.stream(
-                "POST", "audio/speech", json=payload
-            ) as response:
+            async with self._client.stream("POST", "audio/speech", json=payload) as response:
                 if not response.is_success:
                     await response.aread()
                     raise VoiceSynthesisError("TTS upstream rejected request")

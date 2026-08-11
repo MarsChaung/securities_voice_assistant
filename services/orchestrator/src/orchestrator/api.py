@@ -29,8 +29,20 @@ from retrieval import (
     SqlKnowledgeRepository,
 )
 
-from .answering import OpenAICompatibleAnswerComposer
+from .answering import (
+    OpenAICompatibleAnswerComposer,
+    OpenAICompatibleNaturalAnswerComposer,
+)
 from .config import Settings, get_settings
+from .conversation import (
+    ConversationContextStore,
+    ConversationExchange,
+    ConversationResolution,
+    FollowUpResolver,
+    OpenAICompatibleConversationSemanticAnalyzer,
+    ReplyMode,
+)
+from .diagnostics import VoiceTestDiagnosticLogger
 from .intent_routing import OpenAICompatibleIntentRouter
 from .service import TurnService
 from .shadow import ThreadedShadowAnswerRunner
@@ -44,6 +56,7 @@ from .voice import (
     VoicePlaybackMetrics,
     VoiceReplyRequest,
     VoiceService,
+    VoiceTestTurnRequest,
     is_call_ending_utterance,
     ndjson_event,
     realtime_asr_url,
@@ -51,7 +64,7 @@ from .voice import (
 )
 
 _PACKAGE_ROOT = Path(__file__).parent
-_PILOT_ASSET_VERSION = "20260731.2"
+_PILOT_ASSET_VERSION = "20260811.2"
 
 
 def _build_knowledge_retriever(
@@ -95,6 +108,20 @@ def _build_answer_composer(settings: Settings) -> OpenAICompatibleAnswerComposer
     )
 
 
+def _build_natural_answer_composer(
+    settings: Settings,
+) -> OpenAICompatibleNaturalAnswerComposer | None:
+    if not settings.natural_answer_enabled:
+        return None
+
+    return OpenAICompatibleNaturalAnswerComposer(
+        base_url=str(settings.llm_base_url),
+        model=settings.answer_llm_model or "",
+        api_key=settings.llm_api_key.get_secret_value() if settings.llm_api_key else None,
+        timeout_seconds=settings.answer_llm_timeout_seconds,
+    )
+
+
 def _build_intent_router(settings: Settings) -> OpenAICompatibleIntentRouter | None:
     if settings.intent_router_mode == "disabled":
         return None
@@ -107,11 +134,28 @@ def _build_intent_router(settings: Settings) -> OpenAICompatibleIntentRouter | N
     )
 
 
+def _build_conversation_semantic_analyzer(
+    settings: Settings,
+) -> OpenAICompatibleConversationSemanticAnalyzer | None:
+    if settings.conversation_semantic_mode == "disabled":
+        return None
+
+    return OpenAICompatibleConversationSemanticAnalyzer(
+        base_url=str(settings.llm_base_url),
+        model=settings.conversation_llm_model or "",
+        api_key=settings.llm_api_key.get_secret_value() if settings.llm_api_key else None,
+        timeout_seconds=settings.conversation_llm_timeout_seconds,
+    )
+
+
 def create_app(
     *,
     service: TurnService | None = None,
     settings: Settings | None = None,
     voice_service: VoiceService | None = None,
+    conversation_store: ConversationContextStore | None = None,
+    follow_up_resolver: FollowUpResolver | None = None,
+    diagnostic_logger: VoiceTestDiagnosticLogger | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level)
@@ -120,6 +164,7 @@ def create_app(
     knowledge_retriever: LexicalKnowledgeRetriever | HybridKnowledgeRetriever | None = None
     if service is None:
         answer_composer = _build_answer_composer(resolved_settings)
+        natural_answer_composer = _build_natural_answer_composer(resolved_settings)
         if resolved_settings.answer_mode == "shadow_llm" and answer_composer is not None:
             shadow_runner = ThreadedShadowAnswerRunner(
                 composer=answer_composer,
@@ -128,28 +173,35 @@ def create_app(
                 ),
                 max_pending=resolved_settings.shadow_max_pending,
             )
-        knowledge_repository = SqlKnowledgeRepository.from_url(
-            resolved_settings.database_url
-        )
+        knowledge_repository = SqlKnowledgeRepository.from_url(resolved_settings.database_url)
         knowledge_retriever = _build_knowledge_retriever(resolved_settings)
         resolved_service = TurnService(
             knowledge_repository=knowledge_repository,
             knowledge_retriever=knowledge_retriever,
             answer_mode=resolved_settings.answer_mode,
             answer_composer=(
-                answer_composer
-                if resolved_settings.answer_mode == "controlled_llm"
-                else None
+                answer_composer if resolved_settings.answer_mode == "controlled_llm" else None
             ),
+            natural_answer_composer=natural_answer_composer,
             shadow_runner=shadow_runner,
             intent_router_mode=resolved_settings.intent_router_mode,
             intent_router=_build_intent_router(resolved_settings),
-            intent_router_minimum_confidence=(
-                resolved_settings.intent_router_minimum_confidence
-            ),
+            intent_router_minimum_confidence=(resolved_settings.intent_router_minimum_confidence),
         )
     else:
         resolved_service = service
+    resolved_conversation_store = conversation_store or ConversationContextStore()
+    resolved_follow_up_resolver = follow_up_resolver or FollowUpResolver(
+        semantic_mode=resolved_settings.conversation_semantic_mode,
+        semantic_analyzer=_build_conversation_semantic_analyzer(resolved_settings),
+        semantic_minimum_confidence=(
+            resolved_settings.conversation_semantic_minimum_confidence
+        ),
+    )
+    resolved_diagnostic_logger = diagnostic_logger or VoiceTestDiagnosticLogger(
+        enabled=resolved_settings.voice_test_content_logging_enabled,
+        app_env=resolved_settings.app_env,
+    )
     resolved_voice_service = voice_service
     if resolved_voice_service is None and resolved_settings.voice_enabled:
         resolved_voice_service = VoiceService(
@@ -169,14 +221,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if (
-            knowledge_repository is not None
-            and isinstance(knowledge_retriever, HybridKnowledgeRetriever)
+        if knowledge_repository is not None and isinstance(
+            knowledge_retriever, HybridKnowledgeRetriever
         ):
             try:
-                documents = knowledge_repository.eligible_documents(
-                    at=datetime.now(UTC)
-                )
+                documents = knowledge_repository.eligible_documents(at=datetime.now(UTC))
                 warmed = knowledge_retriever.warm(documents)
                 logging.getLogger("sva.retrieval").info(
                     "embedding warmup complete representations=%d",
@@ -204,6 +253,77 @@ def create_app(
         name="pilot-static",
     )
     templates = Jinja2Templates(directory=_PACKAGE_ROOT / "templates")
+
+    def resolve_conversation(
+        *,
+        transcript: str,
+        reply_mode: ReplyMode,
+        session_id: str | None,
+    ) -> ConversationResolution | None:
+        if reply_mode is not ReplyMode.NATURAL or session_id is None:
+            return None
+        return resolved_follow_up_resolver.resolve(
+            utterance=transcript,
+            history=resolved_conversation_store.history(session_id),
+        )
+
+    def record_session_turn(
+        *,
+        request: TurnRequest,
+        reply_mode: ReplyMode,
+        session_id: str | None,
+        conversation: ConversationResolution | None,
+        turn: TurnResponse,
+    ) -> None:
+        contains_sensitive_data = turn.result.intent == "sensitive_data_detected"
+        if session_id is not None and not contains_sensitive_data:
+            resolved_conversation_store.append(
+                session_id,
+                ConversationExchange(
+                    user_utterance=request.transcript,
+                    resolved_query=(
+                        conversation.retrieval_query
+                        if conversation is not None
+                        else request.transcript
+                    ),
+                    assistant_answer=turn.result.answer,
+                    decision=turn.result.decision.value,
+                    knowledge_id=turn.result.answer_id,
+                    knowledge_version=(
+                        turn.result.knowledge_versions[0]
+                        if turn.result.knowledge_versions
+                        else None
+                    ),
+                ),
+            )
+        resolved_diagnostic_logger.exchange(
+            session_id=session_id,
+            turn_id=turn.turn_id,
+            channel=request.channel,
+            reply_mode=reply_mode.value,
+            user_utterance=request.transcript,
+            assistant_answer=turn.result.answer,
+            decision=turn.result.decision.value,
+            intent=turn.result.intent,
+            policy_rule_id=turn.result.policy_rule_id,
+            answer_id=turn.result.answer_id,
+            knowledge_versions=turn.result.knowledge_versions,
+            contains_sensitive_data=contains_sensitive_data,
+            follow_up_kind=(conversation.kind.value if conversation is not None else None),
+            semantic_applied=(
+                conversation.semantic_applied if conversation is not None else False
+            ),
+            semantic_confidence=(
+                conversation.semantic_confidence if conversation is not None else None
+            ),
+            reference_knowledge_id=(
+                conversation.reference_knowledge_id if conversation is not None else None
+            ),
+            semantic_focus=(conversation.focus if conversation is not None else None),
+            resolved_query=(
+                conversation.retrieval_query if conversation is not None else request.transcript
+            ),
+        )
 
     @app.get("/", include_in_schema=False)
     def index() -> RedirectResponse:
@@ -243,7 +363,9 @@ def create_app(
                 "eligible_knowledge_count": availability.eligible_document_count,
                 "retrieval_mode": resolved_settings.retrieval_mode,
                 "answer_mode": resolved_settings.answer_mode,
+                "natural_answer_enabled": resolved_service.natural_answer_available,
                 "intent_router_mode": resolved_settings.intent_router_mode,
+                "conversation_semantic_mode": resolved_settings.conversation_semantic_mode,
                 "voice_enabled": resolved_voice_service is not None,
             },
             status_code=status_code,
@@ -253,6 +375,32 @@ def create_app(
     def evaluate_turn(request: TurnRequest) -> TurnResponse:
         return resolved_service.evaluate(request)
 
+    @app.post("/v1/voice/test-turns/evaluate", response_model=TurnResponse)
+    def evaluate_voice_test_turn(request: VoiceTestTurnRequest) -> TurnResponse:
+        if resolved_settings.app_env != "development":
+            raise HTTPException(404, "找不到資源。")
+        if (
+            request.reply_mode is ReplyMode.NATURAL
+            and not resolved_service.natural_answer_available
+        ):
+            raise HTTPException(409, "自然對話模式目前未啟用。")
+        session_id = str(request.session_id)
+        conversation = resolve_conversation(
+            transcript=request.transcript,
+            reply_mode=request.reply_mode,
+            session_id=session_id,
+        )
+        turn_request = TurnRequest(transcript=request.transcript, channel="web")
+        turn = resolved_service.evaluate(turn_request, conversation=conversation)
+        record_session_turn(
+            request=turn_request,
+            reply_mode=request.reply_mode,
+            session_id=session_id,
+            conversation=conversation,
+            turn=turn,
+        )
+        return turn
+
     @app.post("/v1/turns/{turn_id}/feedback", status_code=204)
     def record_feedback(turn_id: UUID, feedback: TurnFeedback) -> Response:
         resolved_service.record_feedback(turn_id=str(turn_id), rating=feedback.rating)
@@ -260,8 +408,20 @@ def create_app(
 
     @app.get("/v1/voice/config")
     async def voice_config() -> Response:
+        test_config = {
+            "reply_modes": [
+                {"id": ReplyMode.EXACT.value, "label": "核准原文"},
+                *(
+                    [{"id": ReplyMode.NATURAL.value, "label": "自然對話"}]
+                    if resolved_service.natural_answer_available
+                    else []
+                ),
+            ],
+            "diagnostic_content_logging_enabled": resolved_diagnostic_logger.enabled,
+            "conversation_semantic_mode": resolved_settings.conversation_semantic_mode,
+        }
         if resolved_voice_service is None:
-            return JSONResponse({"enabled": False, "available": False})
+            return JSONResponse({"enabled": False, "available": False, **test_config})
         asr_models = list(
             dict.fromkeys(
                 model
@@ -276,9 +436,7 @@ def create_app(
             {
                 "enabled": True,
                 "available": await resolved_voice_service.available(),
-                "realtime_asr_url": realtime_asr_url(
-                    resolved_voice_service.audio_public_base_url
-                ),
+                "realtime_asr_url": realtime_asr_url(resolved_voice_service.audio_public_base_url),
                 "models": {
                     "asr": resolved_voice_service.models.asr,
                     "tts": resolved_voice_service.models.tts,
@@ -293,6 +451,7 @@ def create_app(
                     "default_mode": resolved_settings.barge_in_default_mode,
                     "presets": BARGE_IN_PRESETS,
                 },
+                **test_config,
             }
         )
 
@@ -300,13 +459,38 @@ def create_app(
     async def voice_respond(request: VoiceReplyRequest) -> StreamingResponse:
         if resolved_voice_service is None:
             raise HTTPException(503, "語音服務目前未啟用。")
+        if (
+            request.reply_mode is ReplyMode.NATURAL
+            and not resolved_service.natural_answer_available
+        ):
+            raise HTTPException(409, "自然對話模式目前未啟用。")
         if is_call_ending_utterance(request.transcript):
+            session_id = (
+                str(request.conversation_id) if request.conversation_id is not None else None
+            )
+            if request.conversation_id is not None:
+                resolved_conversation_store.clear(session_id or "")
             segments = split_tts_text(VOICE_FAREWELL_MESSAGE)
+            farewell_turn_id = f"voice-farewell-{uuid4()}"
+            resolved_diagnostic_logger.exchange(
+                session_id=session_id,
+                turn_id=farewell_turn_id,
+                channel="voice",
+                reply_mode=request.reply_mode.value,
+                user_utterance=request.transcript,
+                assistant_answer=VOICE_FAREWELL_MESSAGE,
+                decision="answer",
+                intent="call_ending",
+                policy_rule_id="VOICE-END-001",
+                answer_id=None,
+                knowledge_versions=[],
+                contains_sensitive_data=False,
+            )
 
             async def farewell_stream() -> AsyncIterator[bytes]:
                 yield ndjson_event({"type": "farewell", "speech_segments": segments})
                 async for event in resolved_voice_service.stream_answer(
-                    turn_id=f"voice-farewell-{uuid4()}",
+                    turn_id=farewell_turn_id,
                     answer=VOICE_FAREWELL_MESSAGE,
                 ):
                     yield event
@@ -317,9 +501,25 @@ def create_app(
                 headers={"Cache-Control": "no-store"},
             )
 
+        session_id = str(request.conversation_id) if request.conversation_id is not None else None
+        conversation = resolve_conversation(
+            transcript=request.transcript,
+            reply_mode=request.reply_mode,
+            session_id=session_id,
+        )
+        turn_request = TurnRequest(transcript=request.transcript, channel="voice")
+
         turn = await run_in_threadpool(
             resolved_service.evaluate,
-            TurnRequest(transcript=request.transcript, channel="voice"),
+            turn_request,
+            conversation=conversation,
+        )
+        record_session_turn(
+            request=turn_request,
+            reply_mode=request.reply_mode,
+            session_id=session_id,
+            conversation=conversation,
+            turn=turn,
         )
 
         async def stream() -> AsyncIterator[bytes]:
@@ -341,6 +541,11 @@ def create_app(
             media_type="application/x-ndjson",
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.delete("/v1/voice/conversations/{conversation_id}", status_code=204)
+    def clear_voice_conversation(conversation_id: UUID) -> Response:
+        resolved_conversation_store.clear(str(conversation_id))
+        return Response(status_code=204)
 
     @app.post("/v1/voice/test-greeting-stream")
     async def voice_test_greeting(
@@ -373,9 +578,7 @@ def create_app(
         if resolved_voice_service is None:
             raise HTTPException(503, "語音服務目前未啟用。")
         ends_call = request.stage == "farewell"
-        message = (
-            VOICE_IDLE_FAREWELL_MESSAGE if ends_call else VOICE_IDLE_CHECK_IN_MESSAGE
-        )
+        message = VOICE_IDLE_FAREWELL_MESSAGE if ends_call else VOICE_IDLE_CHECK_IN_MESSAGE
         segments = split_tts_text(message)
 
         async def stream() -> AsyncIterator[bytes]:

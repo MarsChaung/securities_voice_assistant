@@ -36,6 +36,7 @@
     <div class="preview-banner" role="status">
       <strong>本機語音測試</strong>
       <span>僅使用已發布知識；請勿在測試對話中提供個資、帳務資料、密碼或驗證碼。</span>
+      <span id="diagnostic-log-note" hidden>診斷 log 已啟用，測試問答會記錄於本機。</span>
     </div>
 
     <main class="voice-workspace">
@@ -44,6 +45,11 @@
           <div>
             <p class="eyebrow">SIMULATED CALL</p>
             <h1 id="chat-title">對話記錄</h1>
+            <div class="session-meta">
+              <span>Session ID</span>
+              <code id="session-id">建立中…</code>
+              <button id="copy-session-id" type="button">複製</button>
+            </div>
           </div>
           <div class="call-state" id="call-state" data-state="idle">
             <span class="call-state-dot" aria-hidden="true"></span>
@@ -90,6 +96,14 @@
             </div>
             <button class="clear-button" id="clear-chat" type="button">清除記錄</button>
           </header>
+
+          <label class="field" id="reply-mode-control" for="reply-mode">
+            <span>客服回答模式</span>
+            <select id="reply-mode" aria-label="客服回答模式" disabled>
+              <option value="exact">核准原文</option>
+            </select>
+            <small>自然對話只使用已發布知識與本通電話最近數輪內容；通話開始後不可切換。</small>
+          </label>
 
           <label class="field" id="asr-model-control" for="asr-model">
             <span>ASR 辨識模型</span>

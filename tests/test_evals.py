@@ -67,3 +67,20 @@ def test_intent_router_evaluation_covers_account_paraphrases_and_risk_families()
         "credential_or_sensitive_data",
         "complaint_or_dispute",
     }
+
+
+def test_conversation_semantic_evaluation_covers_follow_up_and_new_topics() -> None:
+    cases = [
+        json.loads(line)
+        for line in (ROOT / "evals" / "conversation_semantics" / "golden.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    assert all(case["synthetic"] is True for case in cases)
+    assert len(cases) >= 6
+    assert {case["expected_kind"] for case in cases} == {
+        "new_question",
+        "elaborate",
+        "rephrase",
+    }

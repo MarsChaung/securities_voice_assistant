@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field
 
 @dataclass(frozen=True)
 class TurnDecisionEvent:
-    schema_version: str = field(init=False, default="1.4")
+    schema_version: str = field(init=False, default="1.5")
     turn_id: str
     decision: str
     intent: str
@@ -14,6 +14,11 @@ class TurnDecisionEvent:
     input_character_count: int
     output_character_count: int
     total_latency_ms: float
+    end_to_end_latency_ms: float
+    conversation_resolution_latency_ms: float | None = None
+    conversation_semantic_latency_ms: float | None = None
+    policy_guard_latency_ms: float | None = None
+    retrieval_latency_ms: float | None = None
     answer_id: str | None = None
     answer_confidence: float | None = None
     source_ids: tuple[str, ...] = field(default_factory=tuple)
@@ -137,6 +142,11 @@ class SafeAuditLogger:
         input_character_count: int,
         output_character_count: int,
         total_latency_ms: float,
+        end_to_end_latency_ms: float,
+        conversation_resolution_latency_ms: float | None = None,
+        conversation_semantic_latency_ms: float | None = None,
+        policy_guard_latency_ms: float | None = None,
+        retrieval_latency_ms: float | None = None,
         answer_id: str | None = None,
         answer_confidence: float | None = None,
         source_ids: list[str] | None = None,
@@ -169,6 +179,27 @@ class SafeAuditLogger:
             input_character_count=input_character_count,
             output_character_count=output_character_count,
             total_latency_ms=round(total_latency_ms, 3),
+            end_to_end_latency_ms=round(end_to_end_latency_ms, 3),
+            conversation_resolution_latency_ms=(
+                round(conversation_resolution_latency_ms, 3)
+                if conversation_resolution_latency_ms is not None
+                else None
+            ),
+            conversation_semantic_latency_ms=(
+                round(conversation_semantic_latency_ms, 3)
+                if conversation_semantic_latency_ms is not None
+                else None
+            ),
+            policy_guard_latency_ms=(
+                round(policy_guard_latency_ms, 3)
+                if policy_guard_latency_ms is not None
+                else None
+            ),
+            retrieval_latency_ms=(
+                round(retrieval_latency_ms, 3)
+                if retrieval_latency_ms is not None
+                else None
+            ),
             answer_id=answer_id,
             answer_confidence=answer_confidence,
             source_ids=tuple(source_ids or []),

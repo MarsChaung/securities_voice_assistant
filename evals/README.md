@@ -37,6 +37,17 @@ uv run python -m evals.run_answer_generation
 
 Runner 先完成全部生成，再執行確定性輸出守門與獨立 groundedness 審查；生成文字只暫存在記憶體，不寫入報表或檔案。任何新增事實、遺漏限制、禁止延伸、格式錯誤或模型故障都使評測失敗。
 
+## 對話追問語意解析
+
+使用合成的多輪對話，驗證新問題、局部追問、換句話說、指涉輪次及上下文查詢改寫：
+
+```bash
+SVA_CONVERSATION_LLM_MODEL=<local-model-id> \
+uv run python -m evals.run_conversation_semantics
+```
+
+Runner 不保存模型輸出的查詢文字，只輸出分類正確數、延遲與失敗案例 ID。
+
 ## TTS 模型與分段效能
 
 TTS runner 從已發布且允許回答的知識中，依短、中、長答案各選代表案例。輸出只包含 Knowledge ID、字數、延遲、音訊長度與波形統計，不保存答案或音訊內容。

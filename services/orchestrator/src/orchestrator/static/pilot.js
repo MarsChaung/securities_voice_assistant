@@ -10,6 +10,7 @@ const voiceButton = document.querySelector("#voice-button");
 const voiceStatus = document.querySelector("#voice-status");
 const asrModelControl = document.querySelector("#asr-model-control");
 const asrModelSelect = document.querySelector("#asr-model");
+const replyModeSelect = document.querySelector("#reply-mode");
 const bargeInControl = document.querySelector("#barge-in-control");
 const bargeInModeSelect = document.querySelector("#barge-in-mode");
 const initialMessage = messages.firstElementChild.cloneNode(true);
@@ -26,6 +27,9 @@ const ttsStatus = document.querySelector("#tts-status");
 const knowledgeCount = document.querySelector("#knowledge-count");
 const phaseStatus = document.querySelector("#phase-status");
 const asrLiveText = document.querySelector("#asr-live-text");
+const sessionIdOutput = document.querySelector("#session-id");
+const copySessionIdButton = document.querySelector("#copy-session-id");
+const diagnosticLogNote = document.querySelector("#diagnostic-log-note");
 const conversationPanel = document.querySelector(".conversation-panel");
 const controlColumn = document.querySelector(".control-column");
 const desktopVoiceTestLayout = window.matchMedia("(min-width: 981px)");
@@ -62,7 +66,12 @@ const voiceState = {
   callStartedAt: null,
   callTimer: null,
   layoutObserver: null,
+  conversationId: null,
 };
+
+function selectedReplyMode() {
+  return replyModeSelect?.value || "exact";
+}
 
 function selectedAsrModel() {
   return asrModelSelect.value || voiceState.config?.models?.asr || "";
@@ -116,6 +125,27 @@ function resumePendingAsrEndpoint(nextText = "") {
 function clearVoiceIdleTimer() {
   if (voiceState.idleTimer !== null) clearTimeout(voiceState.idleTimer);
   voiceState.idleTimer = null;
+}
+
+function ensureVoiceTestSession() {
+  if (!voiceTestMode) return null;
+  if (!voiceState.conversationId) voiceState.conversationId = crypto.randomUUID();
+  if (sessionIdOutput) sessionIdOutput.textContent = voiceState.conversationId;
+  return voiceState.conversationId;
+}
+
+function clearVoiceConversation({ rotate = false } = {}) {
+  const conversationId = voiceState.conversationId;
+  if (conversationId) {
+    void fetch(`/v1/voice/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "DELETE",
+      keepalive: true,
+    }).catch(() => {});
+  }
+  if (rotate) {
+    voiceState.conversationId = null;
+    ensureVoiceTestSession();
+  }
 }
 
 function scheduleVoiceIdleTimer() {
@@ -916,6 +946,7 @@ async function startVoiceListening({ preserveIdleStage = false } = {}) {
     clearPendingAsrEndpoint();
     asrModelSelect.disabled = true;
     bargeInModeSelect.disabled = true;
+    if (replyModeSelect) replyModeSelect.disabled = true;
     await ensureMicrophone();
     setVoiceStatus("正在準備即時語音辨識…");
     await ensureRealtimeAsr();
@@ -957,6 +988,8 @@ function stopVoiceSession(status = "語音對話已停止；按麥克風可重�
   voiceButton.setAttribute("aria-label", "開始即時語音對話");
   asrModelSelect.disabled = false;
   bargeInModeSelect.disabled = false;
+  if (replyModeSelect) replyModeSelect.disabled = replyModeSelect.options.length < 2;
+  clearVoiceConversation();
   updateCallControls("idle");
   if (asrStatus) asrStatus.textContent = "尚未連線";
   setVoiceStatus(status);
@@ -1214,10 +1247,15 @@ async function submitVoiceTurn(transcript) {
   const controller = new AbortController();
   voiceState.replyController = controller;
   try {
+    const requestBody = {
+      transcript,
+      reply_mode: selectedReplyMode(),
+      conversation_id: ensureVoiceTestSession(),
+    };
     const response = await fetch("/v1/voice/respond-stream", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
-      body: JSON.stringify({ transcript }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
     if (!response.ok) throw new Error("語音回答服務目前無法使用。");
@@ -1260,6 +1298,7 @@ async function startVoiceTestCall() {
     return;
   }
 
+  ensureVoiceTestSession();
   voiceState.continuous = true;
   updateCallControls("connecting");
   startCallClock();
@@ -1267,6 +1306,7 @@ async function startVoiceTestCall() {
   try {
     asrModelSelect.disabled = true;
     bargeInModeSelect.disabled = true;
+    if (replyModeSelect) replyModeSelect.disabled = true;
     await ensureMicrophone();
     if (!voiceState.continuous) return;
     const controller = new AbortController();
@@ -1319,12 +1359,27 @@ async function loadVoiceConfig() {
   try {
     const response = await fetch("/v1/voice/config", { headers: { Accept: "application/json" } });
     const config = await response.json();
+    voiceState.config = config;
+    if (diagnosticLogNote) {
+      diagnosticLogNote.hidden = !config.diagnostic_content_logging_enabled;
+    }
+    if (replyModeSelect) {
+      const replyModes = config.reply_modes || [{ id: "exact", label: "核准原文" }];
+      replyModeSelect.replaceChildren();
+      for (const mode of replyModes) {
+        const option = document.createElement("option");
+        option.value = mode.id;
+        option.textContent = mode.label;
+        replyModeSelect.append(option);
+      }
+      replyModeSelect.value = "exact";
+      replyModeSelect.disabled = replyModes.length < 2;
+    }
     if (!config.enabled) {
       setStatusValue(voiceServiceStatus, "error", "未啟用");
-      setVoiceStatus("語音功能尚未啟用");
+      setVoiceStatus("語音功能尚未啟用；仍可使用文字代測");
       return;
     }
-    voiceState.config = config;
     const asrModels = [...new Set(config.asr_models || [config.models?.asr])].filter(Boolean);
     asrModelSelect.replaceChildren();
     asrModels.forEach((model) => {
@@ -1386,11 +1441,21 @@ form.addEventListener("submit", async (event) => {
   appendLoading();
 
   try {
-    const response = await fetch("/v1/turns/evaluate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ transcript, channel: "web" }),
-    });
+    const voiceTestRequest = {
+      transcript,
+      session_id: ensureVoiceTestSession(),
+      reply_mode: selectedReplyMode(),
+    };
+    const response = await fetch(
+      voiceTestMode ? "/v1/voice/test-turns/evaluate" : "/v1/turns/evaluate",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(
+          voiceTestMode ? voiceTestRequest : { transcript, channel: "web" },
+        ),
+      },
+    );
     if (!response.ok) throw new Error("turn request failed");
     const turn = await response.json();
     document.querySelector("#loading-message")?.remove();
@@ -1427,9 +1492,20 @@ document.querySelectorAll("[data-question]").forEach((button) => {
 });
 
 clearButton.addEventListener("click", () => {
+  if (voiceTestMode) clearVoiceConversation({ rotate: true });
   messages.replaceChildren(initialMessage.cloneNode(true));
   voiceState.subtitleNodes = [];
   input.focus();
+});
+
+copySessionIdButton?.addEventListener("click", async () => {
+  const sessionId = ensureVoiceTestSession();
+  if (!sessionId) return;
+  await navigator.clipboard.writeText(sessionId);
+  copySessionIdButton.textContent = "已複製";
+  setTimeout(() => {
+    copySessionIdButton.textContent = "複製";
+  }, 1200);
 });
 
 voiceButton.addEventListener("click", toggleVoiceSession);
@@ -1448,4 +1524,5 @@ bargeInModeSelect.addEventListener("change", () => {
 });
 loadSystemState();
 loadVoiceConfig();
+ensureVoiceTestSession();
 initializeVoiceTestLayout();

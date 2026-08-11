@@ -96,6 +96,34 @@ SVA_LLM_API_KEY=<local-api-key>
 
 15 筆知識的離線評測為輸出守門 15/15、獨立 groundedness judge 15/15；8 筆有改寫、7 筆保留原文。Judge 使用 `gemma-4-31b-it-6bit`，只在離線評測執行，不參與線上回答。
 
+語音客服測試另提供可獨立啟用的「自然對話」回答模式。它不改變
+`SVA_ANSWER_MODE` 的部署與安全用途，只在 `/voice-test` 的單次通話中，使用同一筆
+已發布知識的標準答案及最近四輪有限上下文進行口語化、局部追問或換句話說。啟用時
+沿用回答模型：
+
+```bash
+SVA_ANSWER_MODE=exact
+SVA_NATURAL_ANSWER_ENABLED=true
+SVA_ANSWER_LLM_MODEL=Qwen3.6-35B-A3B-oQ4
+SVA_LLM_API_KEY=<local-api-key>
+# 僅限本機問題定位；非敏感測試問答會連同 session ID 寫入 log。
+SVA_VOICE_TEST_CONTENT_LOGGING_ENABLED=true
+# 混合式追問解析可先使用 shadow，通過合成評測後再切 controlled。
+SVA_CONVERSATION_SEMANTIC_MODE=controlled
+SVA_CONVERSATION_LLM_MODEL=Qwen3.6-35B-A3B-oQ4
+SVA_CONVERSATION_SEMANTIC_MINIMUM_CONFIDENCE=0.85
+```
+
+預設仍為核准原文；模型失敗、逾時或輸出守門不通過時也會回退核准原文。上下文只
+存在 orchestrator 記憶體，依通話 UUID 隔離，最多保留最近四輪，掛電話或逾時後清除，
+不保存音訊或寫入一般稽核 log。development 可另行開啟語音測試診斷 log，使用畫面上的
+session ID 搜尋文字代測與語音問答；偵測到個資的輪次一律遮蔽內容，正式環境不生效。
+混合式解析會保留明確規則快速路徑，規則無法判斷時才以結構化 LLM 識別追問、參考輪次
+與完整檢索問句；檢索同時比較原始與上下文問句。自然回答會回傳使用到的核准段落編號，
+輸出失敗時只回退相關核准段落。第一階段不擴充知識結構，因此仍無法回答標準答案未包含
+的細節。完整範圍見[自然對話語音客服模式開發計劃](docs/plans/natural-conversation-voice-mode.md)
+與 [ADR-0012](docs/architecture_decisions/0012-hybrid-conversation-semantics.md)。
+
 `controlled_llm` 只負責依核准內容改寫，與意圖路由是不同開關。目前內部 Pilot 的意圖模型為 `Qwen3.6-35B-A3B-oQ4`，44 筆擴充評測為安全意圖 29/29、風險辨識 15/15，平均延遲約 1.91 秒、P95 約 2.17 秒。可用下列設定啟用：
 
 ```bash
@@ -141,6 +169,7 @@ uv run pytest --cov
 uv run python -m evals.run
 uv run python -m evals.run_hybrid
 uv run python -m evals.run_intent_router
+uv run python -m evals.run_conversation_semantics
 uv run python -m evals.run_answer_generation
 ```
 

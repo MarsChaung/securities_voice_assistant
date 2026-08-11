@@ -34,6 +34,11 @@ def test_audit_event_uses_metadata_allowlist_and_never_logs_transcript(
         "input_character_count",
         "output_character_count",
         "total_latency_ms",
+        "end_to_end_latency_ms",
+        "conversation_resolution_latency_ms",
+        "conversation_semantic_latency_ms",
+        "policy_guard_latency_ms",
+        "retrieval_latency_ms",
         "answer_id",
         "answer_confidence",
         "error_type",
@@ -55,7 +60,7 @@ def test_audit_event_uses_metadata_allowlist_and_never_logs_transcript(
         "intent_router_applied",
         "intent_router_fallback_reason",
     }
-    assert event["schema_version"] == "1.4"
+    assert event["schema_version"] == "1.5"
     assert event["answer_mode"] == "exact"
     assert event["generation_model_id"] is None
     assert event["prompt_version"] is None
@@ -74,6 +79,11 @@ def test_audit_event_uses_metadata_allowlist_and_never_logs_transcript(
     assert event["knowledge_versions"] == []
     assert event["sensitive_data_types"] == ["otp"]
     assert event["total_latency_ms"] >= 0
+    assert event["end_to_end_latency_ms"] >= event["total_latency_ms"]
+    assert event["conversation_resolution_latency_ms"] is None
+    assert event["conversation_semantic_latency_ms"] is None
+    assert event["policy_guard_latency_ms"] >= 0
+    assert event["retrieval_latency_ms"] is None
     assert event["answer_id"] is None
     assert event["answer_confidence"] == 1.0
     assert transcript not in caplog.text
