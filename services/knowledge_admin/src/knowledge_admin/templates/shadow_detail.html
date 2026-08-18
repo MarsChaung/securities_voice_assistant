@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Shadow 複核｜{{ item.title }}{% endblock %}
+{% block content %}
+  <a class="back" href="/admin/shadow">← 返回 Shadow 複核工作台</a>
+  <section class="detail-heading">
+    <div>
+      <div class="heading-meta"><span class="status shadow-status-{{ result.review_status.value }}">{{ shadow_status_labels[result.review_status] }}</span><code>{{ result.knowledge_id }} · v{{ result.knowledge_version }}</code></div>
+      <h1>{{ item.title }}</h1>
+      <p>建立時間 {{ format_event_time(result.created_at) }} · Turn ID {{ result.turn_id }}</p>
+    </div>
+    <div class="version-box"><span>資料版本</span><strong>v{{ result.row_version }}</strong></div>
+  </section>
+
+  {% if notice %}<div class="flash flash-success" role="status">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="flash flash-error" role="alert">{{ error }}</div>{% endif %}
+
+  <div class="shadow-comparison">
+    <section class="panel answer-panel">
+      <p class="panel-label">APPROVED SNAPSHOT</p>
+      <h2>核准標準答案</h2>
+      <p class="answer">{{ result.standard_answer }}</p>
+    </section>
+    <section class="panel generated-panel">
+      <p class="panel-label">SHADOW OUTPUT</p>
+      <h2>模型改寫答案</h2>
+      {% if result.generated_answer %}<p class="answer">{{ result.generated_answer }}</p>{% else %}<p class="empty-answer">模型未產生可複核答案：{{ result.fallback_reason }}</p>{% endif %}
+    </section>
+  </div>
+
+  <div class="detail-grid shadow-detail-grid">
+    <div class="detail-main">
+      <section class="panel">
+        <p class="panel-label">REVIEW CONTEXT</p>
+        <h2>限制條件與來源</h2>
+        <ul class="guardrails">{% for restriction in result.prohibited_extensions %}<li>{{ restriction }}</li>{% endfor %}</ul>
+        <dl class="metadata shadow-source">
+          <div><dt>來源名稱</dt><dd>{{ source.title }}</dd></div>
+          <div><dt>定位資訊</dt><dd>{{ item.source_locator }}</dd></div>
+          <div><dt>正式網址</dt><dd>{% if source.canonical_url %}<a href="{{ source.canonical_url }}" target="_blank" rel="noreferrer">{{ source.canonical_url }}</a>{% else %}無（本機匯入）{% endif %}</dd></div>
+        </dl>
+      </section>
+    </div>
+
+    <aside class="side-column">
+      {% if result.review_status.value == 'pending' and dev_identity_enabled %}
+        <section class="panel action-panel">
+          <p class="panel-label">HUMAN REVIEW</p>
+          <h2>完成複核</h2>
+          <p class="dev-warning">複核只能判斷是否接受此改寫，不能授權模型新增核准知識以外的內容；送出後結果不可覆寫。</p>
+          <form class="action-form" method="post" action="/admin/shadow/{{ result.shadow_id }}/review">
+            <input type="hidden" name="expected_version" value="{{ result.row_version }}">
+            <label>複核身分<select name="actor_id">{% for actor in reviewers %}<option>{{ actor.actor_id }}</option>{% endfor %}</select></label>
+            <label>複核標記<select name="label">{% for label, text in shadow_label_labels.items() %}<option value="{{ label.value }}">{{ text }}</option>{% endfor %}</select></label>
+            <label>複核說明<textarea name="note" maxlength="1000" placeholder="選擇「其他問題」時必填；不得輸入客戶資料"></textarea><small class="field-help">不要貼入客戶問句、帳號、電話、身分資料或其他機敏資訊。</small></label>
+            <button type="submit">送出複核結果</button>
+          </form>
+        </section>
+      {% endif %}
+
+      <section class="panel side-panel">
+        <p class="panel-label">MODEL TRACE</p>
+        <h2>模型與守門資訊</h2>
+        <dl class="stacked-metadata">
+          <div><dt>模型</dt><dd>{{ result.generation_model_id or '未取得' }}</dd></div>
+          <div><dt>Prompt 版本</dt><dd>{{ result.prompt_version or '未取得' }}</dd></div>
+          <div><dt>Prompt 雜湊</dt><dd><code>{{ result.prompt_hash or '未取得' }}</code></dd></div>
+          <div><dt>生成延遲</dt><dd>{% if result.generation_latency_ms is not none %}{{ '%.1f'|format(result.generation_latency_ms) }} ms{% else %}未取得{% endif %}</dd></div>
+          <div><dt>輸出守門</dt><dd>{% if result.output_guard_safe is true %}通過{% elif result.output_guard_safe is false %}阻擋{% else %}未執行{% endif %}</dd></div>
+          <div><dt>結果代碼</dt><dd>{{ result.fallback_reason }}</dd></div>
+        </dl>
+      </section>
+
+      {% if result.review_status.value in ['accepted', 'rejected'] %}
+        <section class="panel side-panel">
+          <p class="panel-label">REVIEW DECISION</p>
+          <h2>人工複核結果</h2>
+          <dl class="stacked-metadata">
+            <div><dt>判定</dt><dd>{{ shadow_label_labels[result.review_label] }}</dd></div>
+            <div><dt>複核人</dt><dd>{{ result.reviewer_id }}</dd></div>
+            <div><dt>完成時間</dt><dd>{{ format_event_time(result.reviewed_at) }}</dd></div>
+            <div><dt>說明</dt><dd>{{ result.reviewer_note or '未填寫' }}</dd></div>
+          </dl>
+        </section>
+      {% endif %}
+    </aside>
+  </div>
+{% endblock %}

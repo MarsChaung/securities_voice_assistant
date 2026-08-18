@@ -1,10 +1,88 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: securities_voice_assistant
+      POSTGRES_USER: sva
+      POSTGRES_PASSWORD: sva-dev-only
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - knowledge-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sva -d securities_voice_assistant"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   orchestrator:
     build: .
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       SVA_APP_ENV: development
       SVA_LOG_LEVEL: INFO
+      SVA_DATABASE_URL: postgresql+psycopg://sva:sva-dev-only@postgres:5432/securities_voice_assistant
+      SVA_KNOWLEDGE_ADMIN_URL: http://127.0.0.1:8081/admin/knowledge
       SVA_LLM_BASE_URL: http://host.docker.internal:12345/v1
+      SVA_LLM_API_KEY: ${SVA_LLM_API_KEY:-}
+      SVA_ANSWER_MODE: ${SVA_ANSWER_MODE:-exact}
+      SVA_ANSWER_LLM_MODEL: ${SVA_ANSWER_LLM_MODEL:-}
+      SVA_ANSWER_LLM_TIMEOUT_SECONDS: ${SVA_ANSWER_LLM_TIMEOUT_SECONDS:-8}
+      SVA_NATURAL_ANSWER_ENABLED: ${SVA_NATURAL_ANSWER_ENABLED:-false}
+      SVA_VOICE_TEST_CONTENT_LOGGING_ENABLED: ${SVA_VOICE_TEST_CONTENT_LOGGING_ENABLED:-false}
+      SVA_SHADOW_MAX_PENDING: ${SVA_SHADOW_MAX_PENDING:-8}
+      SVA_INTENT_ROUTER_MODE: ${SVA_INTENT_ROUTER_MODE:-disabled}
+      SVA_INTENT_LLM_MODEL: ${SVA_INTENT_LLM_MODEL:-}
+      SVA_INTENT_LLM_TIMEOUT_SECONDS: ${SVA_INTENT_LLM_TIMEOUT_SECONDS:-8}
+      SVA_INTENT_ROUTER_MINIMUM_CONFIDENCE: ${SVA_INTENT_ROUTER_MINIMUM_CONFIDENCE:-0.8}
+      SVA_CONVERSATION_SEMANTIC_MODE: ${SVA_CONVERSATION_SEMANTIC_MODE:-disabled}
+      SVA_CONVERSATION_LLM_MODEL: ${SVA_CONVERSATION_LLM_MODEL:-}
+      SVA_CONVERSATION_LLM_TIMEOUT_SECONDS: ${SVA_CONVERSATION_LLM_TIMEOUT_SECONDS:-8}
+      SVA_CONVERSATION_SEMANTIC_MINIMUM_CONFIDENCE: ${SVA_CONVERSATION_SEMANTIC_MINIMUM_CONFIDENCE:-0.85}
+      SVA_RETRIEVAL_MODE: ${SVA_RETRIEVAL_MODE:-lexical}
+      SVA_EMBEDDINGS_BASE_URL: ${SVA_EMBEDDINGS_DOCKER_BASE_URL:-http://host.docker.internal:12345/v1}
+      SVA_EMBEDDINGS_MODEL: ${SVA_EMBEDDINGS_MODEL:-}
+      SVA_EMBEDDINGS_API_KEY: ${SVA_EMBEDDINGS_API_KEY:-}
+      SVA_EMBEDDINGS_TIMEOUT_SECONDS: ${SVA_EMBEDDINGS_TIMEOUT_SECONDS:-5}
+      SVA_EMBEDDINGS_QUERY_PREFIX: ${SVA_EMBEDDINGS_QUERY_PREFIX:-}
+      SVA_EMBEDDINGS_DOCUMENT_PREFIX: ${SVA_EMBEDDINGS_DOCUMENT_PREFIX:-}
+      SVA_HYBRID_RETRIEVAL_MINIMUM_SCORE: ${SVA_HYBRID_RETRIEVAL_MINIMUM_SCORE:-0.4}
+      SVA_HYBRID_RETRIEVAL_AMBIGUITY_MARGIN: ${SVA_HYBRID_RETRIEVAL_AMBIGUITY_MARGIN:-0.02}
+      SVA_VOICE_ENABLED: ${SVA_VOICE_ENABLED:-false}
       SVA_TTS_BASE_URL: http://host.docker.internal:8000/v1
+      SVA_AUDIO_PUBLIC_BASE_URL: ${SVA_AUDIO_PUBLIC_BASE_URL:-http://127.0.0.1:8000/v1}
+      SVA_ASR_MODEL: ${SVA_ASR_MODEL:-}
+      SVA_ASR_CANDIDATE_MODEL: ${SVA_ASR_CANDIDATE_MODEL:-}
+      SVA_TTS_MODEL: ${SVA_TTS_MODEL:-}
+      SVA_TTS_VOICE: ${SVA_TTS_VOICE:-Vivian}
+      SVA_TTS_REF_AUDIO: ${SVA_TTS_REF_AUDIO:-}
+      SVA_TTS_REF_TEXT: ${SVA_TTS_REF_TEXT:-}
+      SVA_VOICE_TIMEOUT_SECONDS: ${SVA_VOICE_TIMEOUT_SECONDS:-180}
+      SVA_VOICE_ACKNOWLEDGEMENT_DELAY_MS: ${SVA_VOICE_ACKNOWLEDGEMENT_DELAY_MS:-450}
+      SVA_ASR_ENDPOINT_GRACE_MS: ${SVA_ASR_ENDPOINT_GRACE_MS:-1200}
+      SVA_BARGE_IN_ENABLED: ${SVA_BARGE_IN_ENABLED:-true}
+      SVA_BARGE_IN_DEFAULT_MODE: ${SVA_BARGE_IN_DEFAULT_MODE:-standard}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  knowledge-admin:
+    build: .
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && python -m knowledge_admin.seed && uvicorn knowledge_admin.api:app --host 0.0.0.0 --port 8081
+    ports:
+      - "127.0.0.1:8081:8081"
+    environment:
+      SVA_APP_ENV: development
+      SVA_DATABASE_URL: postgresql+psycopg://sva:sva-dev-only@postgres:5432/securities_voice_assistant
+      SVA_KNOWLEDGE_ADMIN_DEV_IDENTITY_ENABLED: "true"
+      SVA_VOICE_TEST_URL: http://127.0.0.1:8080/voice-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  knowledge-db:

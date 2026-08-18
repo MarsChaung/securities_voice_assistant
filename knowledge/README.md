@@ -1,0 +1,22 @@
+# 初始知識資料
+
+此目錄保存來源 catalog 與待審核知識草稿。目前包含使用者指定的四個國泰綜合證券官方行銷頁面，擷取日期為 2026-07-15。
+
+## Runtime 邊界
+
+- `sources.json` 只代表頁面可作為來源，不代表頁面所有內容都可回答。
+- `drafts/` 內容均為人工審核前的摘要草稿，`public_answer_allowed=false`。
+- Runtime loader 只會傳回 `published`、來源有效、已生效、未過期且未超過複審到期時間的項目。
+- 未完成 Maker–Checker 角色核准前，不得將草稿改成 `published`。
+- App 操作草稿若未指定適用版本，不得升為 `approved` 或 `published`。
+- FAQ 可在 `question_variants` 保存多種問法；只有 `retrieval` 用途會進入 Runtime，
+  `evaluation_only` 與 `excluded` 只保留於治理內容。
+
+## 本次排除內容
+
+- 個股與 ETF 熱門標的展示、行銷推薦語及歷史績效試算。
+- 密碼補發、個人餘額、庫存、交割款與其他個人帳務查詢；只保留不讀取個人數值的公開導覽步驟。
+- 任何代客下單、改單、刪單或取消委託。
+- 尚未確認有效期的促銷費率與活動內容。
+
+知識答案採摘要改寫並保留 `source_locator`，不保存整頁 HTML 或大段原文。

@@ -1,0 +1,50 @@
+[
+  {
+    "source_id": "SRC-CATHAY-DCA-001",
+    "supplied_url": "https://istockapp.cathaysec.com.tw/Marketing/DCA/",
+    "canonical_url": "https://istockapp.cathaysec.com.tw/Marketing/DCA/",
+    "title": "國泰綜合證券｜台美股定期定額存股",
+    "publisher": "國泰綜合證券",
+    "source_type": "official_web",
+    "retrieved_at": "2026-07-15T19:13:18+08:00",
+    "topics": ["台股定期定額", "美股定期投資", "App 操作", "申請流程", "常見問題"],
+    "status": "active",
+    "notes": "包含促銷費率與活動期限，相關項目發布前必須複核。"
+  },
+  {
+    "source_id": "SRC-CATHAY-USSTOCK-001",
+    "supplied_url": "https://istockapp.cathaysec.com.tw/Marketing/usstock",
+    "canonical_url": "https://istockapp.cathaysec.com.tw/Marketing/usstock",
+    "title": "國泰綜合證券｜美股選國泰，每股都划算",
+    "publisher": "國泰綜合證券",
+    "source_type": "official_web",
+    "retrieved_at": "2026-07-15T19:13:18+08:00",
+    "topics": ["美股交易", "複委託開戶", "交割幣別", "交易時間", "常見問題"],
+    "status": "active",
+    "notes": "頁面含個股與 ETF 展示，不得轉化為投資推薦。"
+  },
+  {
+    "source_id": "SRC-CATHAY-NEWBIE-001",
+    "supplied_url": "https://istockapp.cathaysec.com.tw/Marketing/TipsForNew/",
+    "canonical_url": "https://istockapp.cathaysec.com.tw/Marketing/TipsForNew/",
+    "title": "國泰綜合證券｜新手上路懶人包",
+    "publisher": "國泰綜合證券",
+    "source_type": "official_web",
+    "retrieved_at": "2026-07-15T19:13:18+08:00",
+    "topics": ["證券帳戶", "銀行交割帳戶", "樹精靈 App 操作", "交割期限", "新手知識"],
+    "status": "active",
+    "notes": "密碼補發、餘額與個人帳務內容不納入可回答知識。"
+  },
+  {
+    "source_id": "SRC-CATHAY-DRIP-001",
+    "supplied_url": "https://istockapp.cathaysec.com.tw/Marketing/drip/?utm_source=cathaysec&utm_medium=web",
+    "canonical_url": "https://istockapp.cathaysec.com.tw/Marketing/drip/",
+    "title": "國泰綜合證券｜股息再投資",
+    "publisher": "國泰綜合證券",
+    "source_type": "official_web",
+    "retrieved_at": "2026-07-15T19:13:18+08:00",
+    "topics": ["股息再投資", "國泰證券 App 操作", "申請資格", "執行時間", "常見問題"],
+    "status": "active",
+    "notes": "移除追蹤參數後的 canonical URL；歷史績效試算不納入知識答案。"
+  }
+]

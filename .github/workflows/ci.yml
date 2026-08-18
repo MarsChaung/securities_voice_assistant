@@ -8,6 +8,23 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: securities_voice_assistant
+          POSTGRES_USER: sva
+          POSTGRES_PASSWORD: sva-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sva -d securities_voice_assistant"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      SVA_DATABASE_URL: postgresql+psycopg://sva:sva-ci-only@127.0.0.1:5432/securities_voice_assistant
+      SVA_POSTGRES_TEST_URL: postgresql+psycopg://sva:sva-ci-only@127.0.0.1:5432/securities_voice_assistant
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -15,7 +32,10 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --frozen
+      - run: uv run alembic upgrade head
+      - run: uv run python -m knowledge_admin.seed
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      - run: uv run python -m evals.run
       - run: uv run pytest --cov --cov-fail-under=95

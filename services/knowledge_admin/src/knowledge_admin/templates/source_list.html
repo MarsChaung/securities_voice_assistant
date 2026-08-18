@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}來源目錄{% endblock %}
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">SOURCE REGISTRY</p>
+      <h1>來源目錄</h1>
+      <p>所有知識項目必須能追溯至核准來源；本機匯入以批次與檔案雜湊留存軌跡。</p>
+    </div>
+    <div class="total"><strong>{{ sources|length }}</strong><span>筆</span></div>
+  </section>
+  <section class="source-grid">
+    {% for source in sources %}
+      <article class="source-card">
+        <div class="source-card-top"><span class="status status-published">{{ source.status.value }}</span><code>{{ source.source_id }}</code></div>
+        <h2>{{ source.title }}</h2>
+        <p>{{ source.publisher }} · {{ source.topics|join('、') }}</p>
+        <dl class="source-meta"><div><dt>知識項目</dt><dd>{{ item_counts[source.source_id] }} 筆</dd></div><div><dt>擷取時間</dt><dd>{{ source.retrieved_at.strftime('%Y-%m-%d') }}</dd></div></dl>
+        {% if source.canonical_url %}
+          <a class="source-link" href="{{ source.canonical_url }}" target="_blank" rel="noreferrer">查看原始頁面 ↗</a>
+        {% else %}
+          <span class="source-link">本機匯入（無正式網址）</span>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </section>
+{% endblock %}

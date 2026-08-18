@@ -1,0 +1,204 @@
+<!doctype html>
+<html
+  lang="zh-Hant-TW"
+  data-asset-version="{{ pilot_asset_version }}"
+  data-voice-test="true"
+>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>語音客服測試｜知識治理中心</title>
+    <link rel="stylesheet" href="{{ url_for('pilot-static', path='/voice-test.css') }}?v={{ pilot_asset_version }}">
+    <script defer src="{{ url_for('pilot-static', path='/voice-playback.js') }}?v={{ pilot_asset_version }}"></script>
+    <script defer src="{{ url_for('pilot-static', path='/voice-barge-in.js') }}?v={{ pilot_asset_version }}"></script>
+    <script defer src="{{ url_for('pilot-static', path='/pilot.js') }}?v={{ pilot_asset_version }}"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="{{ knowledge_admin_url }}">
+        <span class="brand-mark" aria-hidden="true">知</span>
+        <span>
+          <strong>知識治理中心</strong>
+          <small>VOICE SERVICE LAB</small>
+        </span>
+      </a>
+      <nav aria-label="測試工作台導覽">
+        <a href="{{ knowledge_admin_url }}">返回知識項目</a>
+        <a href="/pilot">一般問答 Pilot</a>
+      </nav>
+      <div class="system-state" id="system-state" role="status">
+        <span class="state-dot" aria-hidden="true"></span>
+        <span id="system-state-text">正在確認 Runtime 狀態</span>
+      </div>
+    </header>
+
+    <div class="preview-banner" role="status">
+      <strong>本機語音測試</strong>
+      <span>僅使用已發布知識；請勿在測試對話中提供個資、帳務資料、密碼或驗證碼。</span>
+      <span id="diagnostic-log-note" hidden>診斷 log 已啟用，測試問答會記錄於本機。</span>
+    </div>
+
+    <main class="voice-workspace">
+      <section class="conversation-panel" aria-labelledby="chat-title">
+        <header class="panel-heading">
+          <div>
+            <p class="eyebrow">SIMULATED CALL</p>
+            <h1 id="chat-title">對話記錄</h1>
+            <div class="session-meta">
+              <span>Session ID</span>
+              <code id="session-id">建立中…</code>
+              <button id="copy-session-id" type="button">複製</button>
+            </div>
+          </div>
+          <div class="call-state" id="call-state" data-state="idle">
+            <span class="call-state-dot" aria-hidden="true"></span>
+            <span id="call-state-text">尚未通話</span>
+            <time id="call-duration">00:00</time>
+          </div>
+        </header>
+
+        <div class="messages" id="messages" aria-live="polite" aria-busy="false">
+          <article class="conversation-empty">
+            <div class="empty-icon" aria-hidden="true">⌁</div>
+            <h2>準備模擬一通客服來電</h2>
+            <p>按下右側「打電話」，系統會先播放招呼語，再開始即時辨識客戶語音。</p>
+          </article>
+        </div>
+
+        <form class="manual-composer" id="question-form">
+          <label for="question">文字代測 <span>不經 ASR，適合快速驗證知識回答</span></label>
+          <div class="manual-input-row">
+            <textarea
+              id="question"
+              name="question"
+              rows="1"
+              minlength="1"
+              maxlength="4000"
+              placeholder="輸入測試問題，例如：什麼是假除權息？"
+              required
+            ></textarea>
+            <button id="send-button" type="submit">送出代測</button>
+          </div>
+          <div class="composer-meta">
+            <span>⌘／Ctrl + Enter 送出</span>
+            <span><output id="character-count">0</output> / 4000</span>
+          </div>
+        </form>
+      </section>
+
+      <aside class="control-column">
+        <section class="control-card parameter-card" aria-labelledby="parameter-title">
+          <header class="card-heading">
+            <div>
+              <p class="eyebrow">TEST CONTROLS</p>
+              <h2 id="parameter-title">參數設定</h2>
+            </div>
+            <button class="clear-button" id="clear-chat" type="button">清除記錄</button>
+          </header>
+
+          <label class="field" id="reply-mode-control" for="reply-mode">
+            <span>客服回答模式</span>
+            <select id="reply-mode" aria-label="客服回答模式" disabled>
+              <option value="exact">核准原文</option>
+            </select>
+            <small>自然對話只使用已發布知識與本通電話最近數輪內容；通話開始後不可切換。</small>
+          </label>
+
+          <label class="field" id="asr-model-control" for="asr-model">
+            <span>ASR 辨識模型</span>
+            <select id="asr-model" aria-label="語音辨識 A/B 模型" disabled>
+              <option>載入中…</option>
+            </select>
+          </label>
+
+          <label class="field" id="barge-in-control" for="barge-in-mode">
+            <span>插話靈敏度</span>
+            <select id="barge-in-mode" aria-label="語音插話靈敏度" disabled>
+              <option>載入中…</option>
+            </select>
+            <small>播放回答時偵測客戶插話；短促聲音會恢復播放，完整插話才會停止客服語音。</small>
+          </label>
+
+          <label class="field" for="greeting">
+            <span>招呼語</span>
+            <textarea id="greeting" maxlength="300" rows="4">您好，我是 AI 語音客服，很高興為您服務。</textarea>
+            <small>最多 300 字；僅供本機 development 測試，不會保存。</small>
+          </label>
+
+          <div class="subtitle-setting">
+            <span>回答字幕</span>
+            <strong>依語音播放分段顯示</strong>
+          </div>
+
+          <div class="call-actions" aria-label="通話控制">
+            <button
+              class="phone-button call-button"
+              id="voice-button"
+              type="button"
+              aria-label="打電話"
+              hidden
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6.6 10.8c1.5 3 3.6 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.8 21 3 13.2 3 3.7c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.2 1.1l-2.3 2.2Z"/>
+              </svg>
+              <span>打電話</span>
+            </button>
+            <button
+              class="phone-button hangup-button"
+              id="hangup-button"
+              type="button"
+              aria-label="掛電話"
+              disabled
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21.2 15.4 18.4 18c-.4.4-1 .4-1.4 0l-2.2-2.2c-.4-.4-.4-1 0-1.4l1.1-1.1a12.6 12.6 0 0 0-7.8 0l1.1 1.1c.4.4.4 1 0 1.4L7 18c-.4.4-1 .4-1.4 0l-2.8-2.6c-.6-.6-.5-1.6.1-2.1a14.7 14.7 0 0 1 18.2 0c.6.5.7 1.5.1 2.1Z"/>
+              </svg>
+              <span>掛電話</span>
+            </button>
+          </div>
+          <p class="voice-status" id="voice-status">正在載入語音服務設定…</p>
+        </section>
+
+        <section class="control-card status-card" aria-labelledby="status-title">
+          <header class="card-heading">
+            <div>
+              <p class="eyebrow">LIVE TELEMETRY</p>
+              <h2 id="status-title">系統狀態</h2>
+            </div>
+          </header>
+          <dl class="status-grid">
+            <div>
+              <dt>Runtime</dt>
+              <dd id="runtime-status"><span class="status-dot pending"></span>確認中</dd>
+            </div>
+            <div>
+              <dt>語音服務</dt>
+              <dd id="voice-service-status"><span class="status-dot pending"></span>確認中</dd>
+            </div>
+            <div>
+              <dt>ASR</dt>
+              <dd id="asr-status">尚未連線</dd>
+            </div>
+            <div>
+              <dt>TTS</dt>
+              <dd id="tts-status">尚未取得設定</dd>
+            </div>
+            <div>
+              <dt>可回答知識</dt>
+              <dd id="knowledge-count">—</dd>
+            </div>
+            <div>
+              <dt>目前階段</dt>
+              <dd id="phase-status">待機</dd>
+            </div>
+          </dl>
+          <div class="asr-monitor">
+            <span>ASR 即時辨識</span>
+            <p id="asr-live-text">通話開始後，辨識中的文字會顯示在這裡。</p>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </body>
+</html>

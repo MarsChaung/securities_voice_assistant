@@ -1,0 +1,4 @@
+{"case_id":"asr-homophone-zhu","synthetic":true,"input":"什麼是甲竹全席","target_title":"假除權息說明","target_variant":"什麼是假除權息","expected_match":true}
+{"case_id":"asr-homophone-chu","synthetic":true,"input":"什麼是甲雛全息","target_title":"假除權息說明","target_variant":"什麼是假除權息","expected_match":true}
+{"case_id":"asr-short-ambiguous","synthetic":true,"input":"全息","target_title":"假除權息說明","target_variant":"什麼是假除權息","expected_match":false}
+{"case_id":"asr-unrelated","synthetic":true,"input":"什麼是銀行帳戶","target_title":"假除權息說明","target_variant":"什麼是假除權息","expected_match":false}

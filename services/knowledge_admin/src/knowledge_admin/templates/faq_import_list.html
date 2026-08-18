@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}FAQ 匯入{% endblock %}
+{% block content %}
+  <section class="page-heading">
+    <div>
+      <p class="eyebrow">GOVERNED FAQ IMPORT</p>
+      <h1>FAQ 匯入</h1>
+      <p>先解析 Excel 並產生預覽，人工確認後才建立知識草稿。</p>
+    </div>
+    <div class="total"><strong>{{ batches|length }}</strong><span>批次</span></div>
+  </section>
+
+  {% if notice %}<div class="flash flash-success">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+  <section class="panel import-panel">
+    <p class="panel-label">CREATE PREVIEW</p>
+    <h2>建立匯入預覽</h2>
+    <p class="section-help">
+      支援欄位「項次／回答內容／問題1…問題N」的 .xlsx。原始檔不會保存；
+      系統只保存解析結果、SHA-256 與來源中繼資料供追溯。
+    </p>
+    <form class="import-form" method="post" action="/admin/faq-imports/preview" enctype="multipart/form-data">
+      <label>資料集名稱
+        <input name="dataset_title" maxlength="200" required placeholder="例如：阿發文字客服 FAQ（授權測試集）">
+      </label>
+      <label>發布單位
+        <input name="publisher" maxlength="200" required placeholder="例如：客戶服務處">
+      </label>
+      <label>資料來源
+        <select name="source_type" required>
+          <option value="local_import" selected>本機匯入</option>
+          <option value="approved_internal_faq">核准內部 FAQ</option>
+        </select>
+      </label>
+      <label class="wide-field">正式網址（本機匯入可留空）
+        <input name="source_url" type="url" maxlength="2000" placeholder="https://公司內部文件或資料集登錄頁">
+        <small class="field-help">「本機匯入」會以批次、檔案 SHA-256 與 Excel 列號追溯；「核准內部 FAQ」仍須提供 HTTPS 正式網址。</small>
+      </label>
+      <label>建立者
+        <select name="actor_id" required>
+          {% for actor in authors %}<option value="{{ actor.actor_id }}">{{ actor.actor_id }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>FAQ Excel
+        <input class="file-input" name="workbook_file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+      </label>
+      <div class="wide-field"><button type="submit">解析並建立預覽</button></div>
+    </form>
+  </section>
+
+  <section class="table-card import-history">
+    <div class="panel-heading">
+      <div><p class="panel-label">IMPORT HISTORY</p><h2>匯入批次</h2></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>資料集</th><th>來源</th><th>狀態</th><th>預覽結果</th><th>建立時間</th></tr></thead>
+        <tbody>
+          {% for batch in batches %}
+            <tr>
+              <td><a class="item-link" href="/admin/faq-imports/{{ batch.batch_id }}">{{ batch.dataset_title }}</a><small>{{ batch.original_filename }} · {{ batch.file_sha256[:12] }}</small></td>
+              <td>{{ "本機匯入" if batch.source_type == "local_import" else "核准內部 FAQ" }}</td>
+              <td><span class="status faq-import-{{ batch.status.value }}">{{ faq_import_status_labels[batch.status] }}</span></td>
+              <td>{{ batch.valid_row_count }} / {{ batch.row_count }} 筆可匯入<small>已建立 {{ batch.imported_count }} 筆草稿</small></td>
+              <td class="deadline">{{ format_event_time(batch.created_at) }}</td>
+            </tr>
+          {% else %}
+            <tr><td class="empty" colspan="5">尚未建立 FAQ 匯入預覽。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-Hant-TW" data-asset-version="{{ pilot_asset_version }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>證券知識助手｜內部 Web Pilot</title>
+    <link rel="stylesheet" href="{{ url_for('pilot-static', path='/pilot.css') }}?v={{ pilot_asset_version }}">
+    <script defer src="{{ url_for('pilot-static', path='/voice-playback.js') }}?v={{ pilot_asset_version }}"></script>
+    <script defer src="{{ url_for('pilot-static', path='/voice-barge-in.js') }}?v={{ pilot_asset_version }}"></script>
+    <script defer src="{{ url_for('pilot-static', path='/pilot.js') }}?v={{ pilot_asset_version }}"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/pilot" aria-label="證券知識助手首頁">
+        <span class="brand-mark" aria-hidden="true">知</span>
+        <span>
+          <strong>證券知識助手</strong>
+          <small>INTERNAL WEB PILOT</small>
+        </span>
+      </a>
+      <div class="system-state" id="system-state" role="status">
+        <span class="state-dot" aria-hidden="true"></span>
+        <span id="system-state-text">正在確認知識庫狀態</span>
+      </div>
+    </header>
+
+    <div class="pilot-banner">
+      <strong>內部測試</strong>
+      <span>僅提供公開證券知識與核准操作教學，不處理交易、投資建議或個人帳務。</span>
+    </div>
+
+    <main class="workspace">
+      <aside class="guide-panel" aria-labelledby="guide-title">
+        <div>
+          <p class="eyebrow">SAFE KNOWLEDGE ASSISTANT</p>
+          <h1 id="guide-title">先問知識，<br>再做判斷。</h1>
+          <p class="intro">答案只來自已發布且仍在複審效期內的官方知識；沒有可靠來源時，系統會明確拒答。</p>
+        </div>
+
+        <section class="boundary-card" aria-labelledby="boundary-title">
+          <h2 id="boundary-title">使用邊界</h2>
+          <ul>
+            <li><span>01</span>不要輸入帳號、密碼、驗證碼或個人資料</li>
+            <li><span>02</span>不接受下單、改單、刪單或取消委託</li>
+            <li><span>03</span>回答附資料來源與定位資訊，可自行核對</li>
+          </ul>
+        </section>
+
+        <section class="suggestion-section" aria-labelledby="suggestion-title">
+          <h2 id="suggestion-title">可以這樣問</h2>
+          <div class="suggestions">
+            <button type="button" data-question="什麼是台股定期定額？">什麼是台股定期定額？</button>
+            <button type="button" data-question="什麼是股息再投資？">什麼是股息再投資？</button>
+            <button type="button" data-question="什麼是證券帳戶與銀行交割帳戶的差別？">證券與交割帳戶差別</button>
+            <button type="button" data-question="國泰證券 App 的定期投資怎麼操作？">App 定期投資操作</button>
+          </div>
+        </section>
+
+        <a class="governance-link" href="{{ knowledge_admin_url }}" target="_blank" rel="noopener noreferrer">
+          開啟知識治理中心
+          <span aria-hidden="true">↗</span>
+        </a>
+      </aside>
+
+      <section class="chat-shell" aria-labelledby="chat-title">
+        <header class="chat-heading">
+          <div>
+            <p class="eyebrow">LIVE SESSION</p>
+            <h2 id="chat-title">知識問答</h2>
+          </div>
+          <button class="clear-button" id="clear-chat" type="button">清除畫面</button>
+        </header>
+
+        <div class="messages" id="messages" aria-live="polite" aria-busy="false">
+          <article class="message assistant-message">
+            <div class="avatar" aria-hidden="true">知</div>
+            <div class="message-content">
+              <p class="message-label">知識助手</p>
+              <div class="answer-copy">
+                <p>你好，我可以回答公開證券知識，以及國泰證券 App／樹精靈 App 的核准操作教學。</p>
+                <p>請勿提供任何帳務或身分資料。</p>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <form class="composer" id="question-form">
+          <label for="question">輸入問題</label>
+          <div class="input-frame">
+            <textarea
+              id="question"
+              name="question"
+              rows="2"
+              minlength="1"
+              maxlength="4000"
+              placeholder="例如：什麼是台股定期定額？"
+              required
+            ></textarea>
+            <button
+              class="voice-button"
+              id="voice-button"
+              type="button"
+              aria-label="開始即時語音對話"
+              hidden
+            >
+              <span class="mic-icon" aria-hidden="true"></span>
+            </button>
+            <button id="send-button" type="submit">
+              <span>送出</span>
+              <span aria-hidden="true">↑</span>
+            </button>
+          </div>
+          <div class="composer-meta">
+            <div class="composer-status">
+              <span id="voice-status">按 ⌘／Ctrl + Enter 送出</span>
+              <label class="asr-model-control" id="asr-model-control" for="asr-model" hidden>
+                ASR
+                <select id="asr-model" aria-label="語音辨識 A/B 模型"></select>
+              </label>
+              <label class="barge-in-control" id="barge-in-control" for="barge-in-mode" hidden>
+                插話
+                <select id="barge-in-mode" aria-label="語音插話靈敏度"></select>
+              </label>
+            </div>
+            <span><output id="character-count">0</output> / 4000</span>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
