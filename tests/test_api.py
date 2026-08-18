@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -277,20 +277,26 @@ def test_health() -> None:
 
 
 @pytest.mark.parametrize(
-    ("service_kwargs", "message"),
+    ("factory", "message"),
     [
-        ({"answer_mode": "controlled_llm"}, "requires an answer composer"),
-        ({"answer_mode": "shadow_llm"}, "requires a background runner"),
-        ({"intent_router_mode": "controlled"}, "requires an intent router"),
-        ({"intent_router_minimum_confidence": -0.1}, "must be between 0 and 1"),
+        (lambda: TurnService(answer_mode="controlled_llm"), "requires an answer composer"),
+        (lambda: TurnService(answer_mode="shadow_llm"), "requires a background runner"),
+        (
+            lambda: TurnService(intent_router_mode="controlled"),
+            "requires an intent router",
+        ),
+        (
+            lambda: TurnService(intent_router_minimum_confidence=-0.1),
+            "must be between 0 and 1",
+        ),
     ],
 )
 def test_turn_service_rejects_incomplete_runtime_configuration(
-    service_kwargs: dict[str, object],
+    factory: Callable[[], TurnService],
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        TurnService(**service_kwargs)
+        factory()
 
 
 def test_internal_pilot_page_and_static_assets_are_served() -> None:

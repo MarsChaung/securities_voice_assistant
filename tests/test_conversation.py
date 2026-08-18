@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from dataclasses import replace
 
 import httpx
@@ -99,19 +100,25 @@ def test_context_store_evicts_oldest_session_at_capacity() -> None:
 
 
 @pytest.mark.parametrize(
-    ("options", "message"),
+    ("factory", "message"),
     [
-        ({"max_turns": 0}, "max_turns must be positive"),
-        ({"ttl_seconds": 0}, "ttl_seconds must be positive"),
-        ({"max_conversations": 0}, "max_conversations must be positive"),
+        (lambda: ConversationContextStore(max_turns=0), "max_turns must be positive"),
+        (
+            lambda: ConversationContextStore(ttl_seconds=0),
+            "ttl_seconds must be positive",
+        ),
+        (
+            lambda: ConversationContextStore(max_conversations=0),
+            "max_conversations must be positive",
+        ),
     ],
 )
 def test_context_store_rejects_invalid_limits(
-    options: dict[str, int],
+    factory: Callable[[], ConversationContextStore],
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        ConversationContextStore(**options)
+        factory()
 
 
 def test_follow_up_resolver_uses_recent_successful_turn_for_elaboration() -> None:
@@ -311,25 +318,28 @@ def test_conversation_semantic_analyzer_rejects_completion_without_a_choice() ->
 
 
 @pytest.mark.parametrize(
-    ("options", "message"),
+    ("factory", "message"),
     [
-        ({"max_history_turns": 0}, "max_history_turns must be positive"),
         (
-            {"semantic_minimum_confidence": 1.1},
+            lambda: FollowUpResolver(max_history_turns=0),
+            "max_history_turns must be positive",
+        ),
+        (
+            lambda: FollowUpResolver(semantic_minimum_confidence=1.1),
             "semantic minimum confidence must be between 0 and 1",
         ),
         (
-            {"semantic_mode": "controlled"},
+            lambda: FollowUpResolver(semantic_mode="controlled"),
             "enabled semantic mode requires a semantic analyzer",
         ),
     ],
 )
 def test_follow_up_resolver_rejects_invalid_configuration(
-    options: dict[str, object],
+    factory: Callable[[], FollowUpResolver],
     message: str,
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        FollowUpResolver(**options)
+        factory()
 
 
 def test_hybrid_follow_up_resolver_recovers_semantic_restriction_question() -> None:
