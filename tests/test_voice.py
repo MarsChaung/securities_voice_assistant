@@ -31,6 +31,7 @@ from orchestrator.voice import (
     VOICE_IDLE_CHECK_IN_MESSAGE,
     VOICE_IDLE_FAREWELL_MESSAGE,
     VoiceService,
+    VoiceSynthesisError,
     extract_wav_frames,
     is_call_ending_utterance,
     realtime_asr_url,
@@ -143,6 +144,37 @@ def test_voice_helpers_preserve_realtime_url_and_complete_wav_frames() -> None:
         "第一句回答。",
         "第二句補充。",
     ]
+
+    partial_frame = frame[:20]
+    assert extract_wav_frames(partial_frame) == ([], partial_frame)
+    with pytest.raises(VoiceSynthesisError, match="invalid WAV stream"):
+        extract_wav_frames(b"not-a-wave!!!")
+
+
+def test_voice_service_requires_complete_clone_configuration() -> None:
+    with pytest.raises(ValueError, match="reference audio and text"):
+        VoiceService(
+            audio_base_url="http://audio.test/v1",
+            audio_public_base_url="http://127.0.0.1:8000/v1",
+            asr_model="synthetic-asr",
+            tts_model="synthetic-tts",
+            tts_voice="Vivian",
+            tts_ref_audio="/private/reference.wav",
+        )
+
+
+def test_voice_service_availability_hides_transport_failure() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("synthetic unavailable", request=request)
+
+    service = voice_service(httpx.MockTransport(handler))
+
+    async def check() -> bool:
+        available = await service.available()
+        await service.close()
+        return available
+
+    assert asyncio.run(check()) is False
 
 
 @pytest.mark.parametrize(
@@ -265,6 +297,57 @@ def test_voice_service_streams_audio_and_logs_no_answer_text() -> None:
     assert answer not in json.dumps(audit.events[0], ensure_ascii=False)
 
 
+@pytest.mark.parametrize(
+    "failure_mode",
+    ["rejected", "transport", "incomplete", "empty_stream", "empty_wav"],
+)
+def test_voice_service_reports_governed_error_for_tts_failures(
+    failure_mode: str,
+) -> None:
+    empty_wav = io.BytesIO()
+    with wave.open(empty_wav, "wb") as target:
+        target.setnchannels(1)
+        target.setsampwidth(2)
+        target.setframerate(24_000)
+        target.writeframes(b"")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if failure_mode == "rejected":
+            return httpx.Response(503, text="private upstream response")
+        if failure_mode == "transport":
+            raise httpx.ConnectError("private transport detail", request=request)
+        if failure_mode == "incomplete":
+            return httpx.Response(200, content=b"RIFF")
+        if failure_mode == "empty_wav":
+            return httpx.Response(200, content=empty_wav.getvalue())
+        return httpx.Response(200, content=b"")
+
+    audit = CapturingVoiceAuditLogger()
+    service = voice_service(httpx.MockTransport(handler), audit_logger=audit)
+
+    async def collect() -> list[dict[str, object]]:
+        events = [
+            json.loads(payload)
+            async for payload in service.stream_answer(
+                turn_id=f"turn-{failure_mode}",
+                answer="核准回答",
+            )
+        ]
+        await service.close()
+        return events
+
+    events = asyncio.run(collect())
+
+    assert events == [
+        {
+            "type": "error",
+            "detail": "語音合成暫時無法使用，畫面仍保留文字答案。",
+        }
+    ]
+    assert audit.events[0]["error_type"] == "tts_unavailable"
+    assert audit.events[0]["audio_chunk_count"] == 0
+
+
 def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     frame = make_wav_frame()
 
@@ -340,6 +423,38 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert turn["result"]["policy_rule_id"] == "KNO-001"
     assert events[1]["type"] == "audio"
     assert events[-1]["type"] == "done"
+
+
+def test_voice_endpoints_report_disabled_service() -> None:
+    settings = Settings(
+        app_env="development",
+        database_url="sqlite+pysqlite:///:memory:",
+        retrieval_mode="lexical",
+        answer_mode="exact",
+        intent_router_mode="disabled",
+        voice_enabled=False,
+    )
+
+    with TestClient(create_app(service=TurnService(), settings=settings)) as client:
+        config = client.get("/v1/voice/config")
+        responses = [
+            client.post(
+                "/v1/voice/respond-stream",
+                json={"transcript": "如何開戶？"},
+            ),
+            client.post(
+                "/v1/voice/test-greeting-stream",
+                json={"greeting": "您好"},
+            ),
+            client.post(
+                "/v1/voice/idle-prompt-stream",
+                json={"stage": "check_in"},
+            ),
+        ]
+
+    assert config.json()["enabled"] is False
+    assert config.json()["available"] is False
+    assert [response.status_code for response in responses] == [503, 503, 503]
 
 
 def test_voice_natural_mode_keeps_recent_context_and_can_be_cleared() -> None:

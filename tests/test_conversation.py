@@ -2,6 +2,7 @@ import json
 from dataclasses import replace
 
 import httpx
+import pytest
 
 from orchestrator.conversation import (
     ConversationContextStore,
@@ -95,6 +96,22 @@ def test_context_store_evicts_oldest_session_at_capacity() -> None:
     assert store.history("call-a") == ()
     assert store.history("call-b")
     assert store.history("call-c")
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"max_turns": 0}, "max_turns must be positive"),
+        ({"ttl_seconds": 0}, "ttl_seconds must be positive"),
+        ({"max_conversations": 0}, "max_conversations must be positive"),
+    ],
+)
+def test_context_store_rejects_invalid_limits(
+    options: dict[str, int],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        ConversationContextStore(**options)
 
 
 def test_follow_up_resolver_uses_recent_successful_turn_for_elaboration() -> None:
@@ -272,6 +289,47 @@ def test_conversation_semantic_analyzer_uses_structured_bounded_context() -> Non
     assert result.assessment.reference_turn_id == "T2"
     assert "承接語" in OpenAICompatibleConversationSemanticAnalyzer.SYSTEM_PROMPT
     assert result.prompt_version == "conversation-semantic-v3"
+
+
+def test_conversation_semantic_analyzer_rejects_completion_without_a_choice() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer synthetic-secret"
+        return httpx.Response(200, json={"choices": []})
+
+    analyzer = OpenAICompatibleConversationSemanticAnalyzer(
+        base_url="http://llm.test/v1",
+        model="synthetic-model",
+        api_key="synthetic-secret",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(ConversationSemanticRoutingError):
+        analyzer.analyze(
+            utterance="那要準備什麼？",
+            history=(exchange("未成年怎麼開戶"),),
+        )
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"max_history_turns": 0}, "max_history_turns must be positive"),
+        (
+            {"semantic_minimum_confidence": 1.1},
+            "semantic minimum confidence must be between 0 and 1",
+        ),
+        (
+            {"semantic_mode": "controlled"},
+            "enabled semantic mode requires a semantic analyzer",
+        ),
+    ],
+)
+def test_follow_up_resolver_rejects_invalid_configuration(
+    options: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        FollowUpResolver(**options)
 
 
 def test_hybrid_follow_up_resolver_recovers_semantic_restriction_question() -> None:

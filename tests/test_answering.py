@@ -192,6 +192,36 @@ def test_natural_answer_composer_hides_remote_error_details() -> None:
 
 
 @pytest.mark.parametrize(
+    "composer_type",
+    [OpenAICompatibleAnswerComposer, OpenAICompatibleNaturalAnswerComposer],
+)
+def test_answer_composers_reject_completion_without_a_choice(composer_type: type) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer synthetic-secret"
+        return httpx.Response(200, json={"choices": []})
+
+    composer = composer_type(
+        base_url="http://llm.test/v1",
+        model="synthetic-model",
+        api_key="synthetic-secret",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(AnswerGenerationError):
+        if isinstance(composer, OpenAICompatibleNaturalAnswerComposer):
+            composer.compose(
+                evidence(),
+                current_utterance="請說明",
+                resolved_query="請說明美股交割方式",
+                focus=None,
+                follow_up_kind=FollowUpKind.NEW_QUESTION,
+                history=(),
+            )
+        else:
+            composer.compose(evidence())
+
+
+@pytest.mark.parametrize(
     ("answer", "reason"),
     [
         ("美股可用新臺幣或美元交割，處理時間為 3 天。", "unsupported_number"),
@@ -222,6 +252,34 @@ def test_output_guard_accepts_concise_grounded_paraphrase() -> None:
 
     assert result.safe is True
     assert result.reason is None
+
+
+@pytest.mark.parametrize(
+    ("generated_answer", "standard_answer", "extensions", "safe", "reason"),
+    [
+        ("", "核准回答", (), False, "empty_answer"),
+        ("甲" * 241, "甲", (), False, "answer_too_long"),
+        ("核准回答含禁止延伸", "核准回答", ("禁止延伸",), False, "prohibited_extension"),
+        ("辦理時間為25點", "辦理時間為25點", (), True, None),
+        ("上午12點辦理", "上午12點辦理", (), True, None),
+        ("費率為1.5元", "費率為1.5元", (), True, None),
+    ],
+)
+def test_output_guard_handles_boundary_content(
+    generated_answer: str,
+    standard_answer: str,
+    extensions: tuple[str, ...],
+    safe: bool,
+    reason: str | None,
+) -> None:
+    result = ControlledOutputGuard().validate(
+        generated_answer=generated_answer,
+        standard_answer=standard_answer,
+        prohibited_extensions=extensions,
+    )
+
+    assert result.safe is safe
+    assert result.reason == reason
 
 
 def test_focus_approved_answer_extracts_attendance_requirement() -> None:

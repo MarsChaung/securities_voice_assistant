@@ -276,6 +276,23 @@ def test_health() -> None:
     assert response.json()["intent_router_mode"] == "disabled"
 
 
+@pytest.mark.parametrize(
+    ("service_kwargs", "message"),
+    [
+        ({"answer_mode": "controlled_llm"}, "requires an answer composer"),
+        ({"answer_mode": "shadow_llm"}, "requires a background runner"),
+        ({"intent_router_mode": "controlled"}, "requires an intent router"),
+        ({"intent_router_minimum_confidence": -0.1}, "must be between 0 and 1"),
+    ],
+)
+def test_turn_service_rejects_incomplete_runtime_configuration(
+    service_kwargs: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        TurnService(**service_kwargs)
+
+
 def test_internal_pilot_page_and_static_assets_are_served() -> None:
     client = make_client()
 
@@ -795,6 +812,50 @@ def test_natural_generation_failure_falls_back_to_exact_approved_answer() -> Non
     )
 
     assert response.result.answer == document.item.standard_answer
+
+
+def test_natural_mode_without_composer_falls_back_to_exact_approved_answer() -> None:
+    document = published_document()
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(transcript="什麼是台股定期定額？", channel="voice"),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.NEW_QUESTION,
+            retrieval_query="什麼是台股定期定額？",
+            history=(),
+        ),
+    )
+
+    assert response.result.answer == document.item.standard_answer
+
+
+def test_natural_mode_rejects_unknown_selected_evidence_segments() -> None:
+    document = published_document()
+    composer = StaticNaturalAnswerComposer(
+        answer="模型自行產生的回答",
+        selected_segment_ids=("S999",),
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=composer,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(transcript="什麼是台股定期定額？", channel="voice"),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.NEW_QUESTION,
+            retrieval_query="什麼是台股定期定額？",
+            history=(),
+        ),
+    )
+
+    assert response.result.answer == document.item.standard_answer
+    assert len(composer.calls) == 1
 
 
 def test_natural_focused_follow_up_falls_back_to_relevant_approved_excerpt() -> None:
@@ -1690,6 +1751,20 @@ def test_intent_router_failure_falls_back_to_deterministic_policy() -> None:
     )
 
     assert response.json()["result"]["policy_rule_id"] == "POL-DEFAULT-DENY"
+
+
+def test_intent_router_prefetch_failure_is_reused_as_safe_fallback() -> None:
+    router = StaticIntentRouter(candidate_intents=["account_opening_general"], fail=True)
+    service = TurnService(intent_router_mode="controlled", intent_router=router)
+    request = TurnRequest(transcript="如何開複委託帳戶?", channel="voice")
+
+    prefetched = service.prefetch_intent_route(request)
+    response = service.evaluate(request, prefetched_intent_route=prefetched)
+
+    assert prefetched is not None
+    assert prefetched.fallback_reason == "routing_error"
+    assert response.result.policy_rule_id == "POL-DEFAULT-DENY"
+    assert router.questions == [request.transcript]
 
 
 def test_confident_prefetched_intent_is_reused_after_context_resolution() -> None:
