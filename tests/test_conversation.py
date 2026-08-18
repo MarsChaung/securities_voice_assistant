@@ -274,7 +274,8 @@ def test_conversation_semantic_analyzer_uses_structured_bounded_context() -> Non
 
     assert result.assessment.kind is FollowUpKind.ELABORATE
     assert result.assessment.reference_turn_id == "T2"
-    assert result.prompt_version == "conversation-semantic-v2"
+    assert "承接語" in OpenAICompatibleConversationSemanticAnalyzer.SYSTEM_PROMPT
+    assert result.prompt_version == "conversation-semantic-v3"
 
 
 def test_hybrid_follow_up_resolver_recovers_semantic_restriction_question() -> None:

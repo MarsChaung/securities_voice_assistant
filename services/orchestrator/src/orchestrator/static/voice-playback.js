@@ -8,22 +8,38 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
 
-  const DEFAULT_INITIAL_BUFFER_SECONDS = 1.2;
+  const DEFAULT_INITIAL_BUFFER_SECONDS = 0.96;
   const DEFAULT_CROSSFADE_SECONDS = 0.008;
   const DEFAULT_MINIMUM_LEAD_SECONDS = 0.04;
-  const MAXIMUM_INITIAL_BUFFER_SECONDS = 3;
-  const MAXIMUM_INITIAL_WAIT_SECONDS = 2.8;
+  const MAXIMUM_INITIAL_BUFFER_SECONDS = 1.44;
+  const MAXIMUM_INITIAL_WAIT_SECONDS = 1.6;
 
   function recommendedInitialBufferSeconds(answerCharacterCount) {
     return Math.min(
       MAXIMUM_INITIAL_BUFFER_SECONDS,
-      Math.max(DEFAULT_INITIAL_BUFFER_SECONDS, answerCharacterCount * 0.04),
+      Math.max(DEFAULT_INITIAL_BUFFER_SECONDS, answerCharacterCount * 0.015),
     );
   }
 
   function voiceFailureDisposition(errorName, replyDisplayed) {
     if (errorName === "AbortError") return "interrupted";
     return replyDisplayed ? "playback_degraded" : "service_unavailable";
+  }
+
+  function chooseNonRepeatingAudioUrl(
+    candidates,
+    previousUrl,
+    random = Math.random,
+  ) {
+    const unique = [...new Set((candidates || []).filter(Boolean))];
+    if (!unique.length) return null;
+    const selectable =
+      unique.length > 1 ? unique.filter((url) => url !== previousUrl) : unique;
+    const index = Math.min(
+      selectable.length - 1,
+      Math.floor(random() * selectable.length),
+    );
+    return selectable[index];
   }
 
   class VoicePlaybackScheduler {
@@ -257,6 +273,7 @@
     MAXIMUM_INITIAL_BUFFER_SECONDS,
     MAXIMUM_INITIAL_WAIT_SECONDS,
     VoicePlaybackScheduler,
+    chooseNonRepeatingAudioUrl,
     recommendedInitialBufferSeconds,
     voiceFailureDisposition,
   };

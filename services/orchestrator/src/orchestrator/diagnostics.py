@@ -66,3 +66,25 @@ class VoiceTestDiagnosticLogger:
             "voice_test_conversation %s",
             json.dumps(event, ensure_ascii=False),
         )
+
+    def acknowledgement(
+        self,
+        *,
+        session_id: str | None,
+        variant: str,
+        triggered_after_ms: float,
+        answer_ready_after_ms: float,
+    ) -> None:
+        if not self.enabled or session_id is None:
+            return
+        event = {
+            "schema_version": "1.0",
+            "session_id": session_id,
+            "variant": variant,
+            "triggered_after_ms": round(triggered_after_ms, 3),
+            "answer_ready_after_ms": round(answer_ready_after_ms, 3),
+        }
+        self._logger.info(
+            "voice_test_acknowledgement %s",
+            json.dumps(event, ensure_ascii=False),
+        )

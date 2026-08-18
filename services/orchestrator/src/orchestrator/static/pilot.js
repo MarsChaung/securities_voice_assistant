@@ -51,6 +51,8 @@ const voiceState = {
   replyController: null,
   activeSources: new Set(),
   playbackScheduler: null,
+  acknowledgementAudio: new Map(),
+  lastAcknowledgementAudioUrl: null,
   partialTranscript: "",
   replyDisplayed: false,
   bargeInDetector: null,
@@ -1020,8 +1022,64 @@ async function playVoiceResponse(response, signal) {
     voiceState.playbackScheduler = scheduler;
   };
 
+  const playAcknowledgement = async (audioUrl) => {
+    if (!audioUrl) return;
+    try {
+      const cached = voiceState.acknowledgementAudio.get(audioUrl);
+      const bytes = await (
+        cached
+          ? cached
+          : fetch(audioUrl, { cache: "force-cache" }).then((audioResponse) => {
+              if (!audioResponse.ok) throw new Error("無法載入等待提示音。");
+              return audioResponse.arrayBuffer();
+            })
+      );
+      if (signal.aborted) throw new DOMException("回覆已中斷。", "AbortError");
+      const audioBuffer = await voiceState.audioContext.decodeAudioData(bytes.slice(0));
+      await new Promise((resolve, reject) => {
+        const source = voiceState.audioContext.createBufferSource();
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", abort);
+          voiceState.activeSources.delete(source);
+          resolve();
+        };
+        const abort = () => {
+          if (settled) return;
+          settled = true;
+          voiceState.activeSources.delete(source);
+          try {
+            source.stop();
+          } catch {}
+          reject(new DOMException("回覆已中斷。", "AbortError"));
+        };
+        source.buffer = audioBuffer;
+        source.connect(voiceState.audioContext.destination);
+        source.onended = finish;
+        signal.addEventListener("abort", abort, { once: true });
+        voiceState.activeSources.add(source);
+        setVoiceStatus("正在為您查詢核准知識…");
+        source.start();
+      });
+      setVoiceStatus("正在整理核准知識回答…");
+    } catch (error) {
+      if (error.name === "AbortError") throw error;
+    }
+  };
+
   const handleEvent = async (event) => {
     if (signal.aborted) throw new DOMException("回覆已中斷。", "AbortError");
+    if (event.type === "acknowledgement") {
+      const audioUrl = VoicePlayback.chooseNonRepeatingAudioUrl(
+        event.audio_urls || [event.audio_url],
+        voiceState.lastAcknowledgementAudioUrl,
+      );
+      voiceState.lastAcknowledgementAudioUrl = audioUrl;
+      await playAcknowledgement(audioUrl);
+      return;
+    }
     if (event.type === "turn") {
       document.querySelector("#voice-loading-message")?.remove();
       appendAssistantMessage(event.turn, true, {
@@ -1299,6 +1357,7 @@ async function startVoiceTestCall() {
   }
 
   ensureVoiceTestSession();
+  voiceState.lastAcknowledgementAudioUrl = null;
   voiceState.continuous = true;
   updateCallControls("connecting");
   startCallClock();
@@ -1360,6 +1419,19 @@ async function loadVoiceConfig() {
     const response = await fetch("/v1/voice/config", { headers: { Accept: "application/json" } });
     const config = await response.json();
     voiceState.config = config;
+    voiceState.acknowledgementAudio.clear();
+    for (const acknowledgementAudioUrl of Object.values(
+      config.acknowledgement?.audio_urls || {},
+    )) {
+      const bytesPromise = fetch(acknowledgementAudioUrl, { cache: "force-cache" }).then(
+        (audioResponse) => {
+          if (!audioResponse.ok) throw new Error("無法預載等待提示音。");
+          return audioResponse.arrayBuffer();
+        },
+      );
+      voiceState.acknowledgementAudio.set(acknowledgementAudioUrl, bytesPromise);
+      bytesPromise.catch(() => {});
+    }
     if (diagnosticLogNote) {
       diagnosticLogNote.hidden = !config.diagnostic_content_logging_enabled;
     }

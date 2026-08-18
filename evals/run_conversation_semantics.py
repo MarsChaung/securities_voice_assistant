@@ -29,6 +29,8 @@ def _normalize_eval_query(value: str) -> str:
         ("線上申請", "線上開戶"),
         ("重新申請", "開戶"),
         ("重辦", "開戶"),
+        ("如何", "操作"),
+        ("怎麼", "操作"),
     ):
         normalized = normalized.replace(source, replacement)
     return normalized

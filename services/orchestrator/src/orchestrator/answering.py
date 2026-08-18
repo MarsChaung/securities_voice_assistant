@@ -61,11 +61,19 @@ class NaturalAnswerComposer(Protocol):
         evidence: AnswerEvidence,
         *,
         current_utterance: str,
+        resolved_query: str,
+        focus: str | None,
         follow_up_kind: FollowUpKind,
         history: Sequence[ConversationExchange],
     ) -> GeneratedAnswer: ...
 
 
+_OPERATION_FOCUS_PATTERN = re.compile(
+    r"操作|步驟|怎麼(?:申請|辦理|簽署)|如何(?:申請|辦理|簽署)"
+)
+_OPERATION_ANSWER_PATTERN = re.compile(
+    r"App|點(?:選|擊)|依序|進入|開啟|打開|線上申辦|攜帶|分公司|臨櫃"
+)
 _APPROVED_ANSWER_FOCUS_RULES = (
     (
         re.compile(
@@ -81,6 +89,27 @@ _APPROVED_ANSWER_FOCUS_RULES = (
         re.compile(r"時間|幾點|何時|營業到"),
         re.compile(r"時間|上午|下午|營業日|週[一二三四五六日]"),
     ),
+    (
+        _OPERATION_FOCUS_PATTERN,
+        _OPERATION_ANSWER_PATTERN,
+    ),
+)
+
+_ANSWER_CHANNELS = ("線上", "臨櫃")
+_CHANNEL_SECTION_HEADING_PATTERN = re.compile(
+    r"^\s*(?:(?:[一二三四五六七八九十]+|\d+)\s*[、.．)）]\s*|"
+    r"[（(](?:[一二三四五六七八九十]+|\d+)[）)]\s*|[-*•]\s*)?"
+    r"(?P<channel>線上|臨櫃)"
+)
+_CHANNEL_SECTION_END_PATTERN = re.compile(
+    r"^\s*(?:(?:[一二三四五六七八九十]+|\d+)\s*[、.．)）]\s*|"
+    r"[（(](?:[一二三四五六七八九十]+|\d+)[）)]\s*|[-*•]\s*)?"
+    r"(?:提醒|注意|限制|例外)"
+)
+_CHANNEL_SECTION_LABEL_PATTERN = re.compile(
+    r"^\s*(?:(?:[一二三四五六七八九十]+|\d+)\s*[、.．)）]\s*|"
+    r"[（(](?:[一二三四五六七八九十]+|\d+)[）)]\s*|[-*•]\s*)?"
+    r"(?:線上|臨櫃)(?:申請|申辦|辦理|簽署)?(?:方式|流程|步驟)?\s*[：:]?\s*$"
 )
 
 
@@ -88,6 +117,14 @@ _APPROVED_ANSWER_FOCUS_RULES = (
 class ApprovedAnswerSegment:
     segment_id: str
     text: str
+
+
+@dataclass(frozen=True)
+class _ScopedApprovedAnswerSegment:
+    index: int
+    segment: ApprovedAnswerSegment
+    channel: str | None
+    section_heading_index: int | None
 
 
 def split_approved_answer_segments(
@@ -122,16 +159,57 @@ def select_approved_answer_segments(
     return "\n".join(selected) or None
 
 
+def _scope_approved_answer_segments(
+    segments: tuple[ApprovedAnswerSegment, ...],
+) -> tuple[_ScopedApprovedAnswerSegment, ...]:
+    scoped: list[_ScopedApprovedAnswerSegment] = []
+    current_channel: str | None = None
+    current_heading_index: int | None = None
+    for index, segment in enumerate(segments):
+        heading = _CHANNEL_SECTION_HEADING_PATTERN.search(segment.text)
+        if heading is not None:
+            current_channel = heading.group("channel")
+            current_heading_index = index
+        elif _CHANNEL_SECTION_END_PATTERN.search(segment.text):
+            current_channel = None
+            current_heading_index = None
+
+        explicit_channels = [
+            channel for channel in _ANSWER_CHANNELS if channel in segment.text
+        ]
+        channel = (
+            explicit_channels[0]
+            if len(explicit_channels) == 1
+            else current_channel if not explicit_channels else None
+        )
+        scoped.append(
+            _ScopedApprovedAnswerSegment(
+                index=index,
+                segment=segment,
+                channel=channel,
+                section_heading_index=(
+                    current_heading_index if channel == current_channel else None
+                ),
+            )
+        )
+    return tuple(scoped)
+
+
 def focus_approved_answer(
     *,
     standard_answer: str,
     current_utterance: str,
+    resolved_query: str | None = None,
+    focus: str | None = None,
 ) -> str | None:
+    focus_query = "；".join(
+        part for part in (current_utterance, resolved_query, focus) if part
+    )
     answer_pattern = next(
         (
             answer_pattern
             for question_pattern, answer_pattern in _APPROVED_ANSWER_FOCUS_RULES
-            if question_pattern.search(current_utterance)
+            if question_pattern.search(focus_query)
         ),
         None,
     )
@@ -139,10 +217,53 @@ def focus_approved_answer(
         return None
 
     segments = split_approved_answer_segments(standard_answer)
+    scoped_segments = _scope_approved_answer_segments(segments)
     focused_segments = [
-        segment.text for segment in segments if answer_pattern.search(segment.text)
+        segment
+        for segment in scoped_segments
+        if answer_pattern.search(segment.segment.text)
     ]
-    return "\n".join(focused_segments) or None
+    wants_online = "線上" in focus_query
+    wants_counter = "臨櫃" in focus_query
+    if wants_online != wants_counter:
+        channel = "線上" if wants_online else "臨櫃"
+        channel_segments = [
+            segment for segment in focused_segments if segment.channel == channel
+        ]
+        if channel_segments:
+            focused_segments = channel_segments
+        elif any(segment.channel is not None for segment in focused_segments):
+            return None
+    if _OPERATION_FOCUS_PATTERN.search(focus_query):
+        matched_heading_indices = {
+            segment.section_heading_index
+            for segment in focused_segments
+            if segment.section_heading_index is not None
+        }
+        if matched_heading_indices:
+            focused_segments = [
+                segment
+                for segment in scoped_segments
+                if segment.section_heading_index in matched_heading_indices
+                and not (
+                    segment.index == segment.section_heading_index
+                    and _CHANNEL_SECTION_LABEL_PATTERN.fullmatch(segment.segment.text)
+                )
+            ]
+    selected_indices = {segment.index for segment in focused_segments}
+    selected_indices.update(
+        segment.section_heading_index
+        for segment in focused_segments
+        if segment.section_heading_index is not None
+        and not _CHANNEL_SECTION_LABEL_PATTERN.fullmatch(
+            segments[segment.section_heading_index].text
+        )
+    )
+    return "\n".join(
+        segment.text
+        for index, segment in enumerate(segments)
+        if index in selected_indices
+    ) or None
 
 
 class _GeneratedPayload(BaseModel):
@@ -255,16 +376,19 @@ class OpenAICompatibleAnswerComposer:
 
 
 class OpenAICompatibleNaturalAnswerComposer:
-    PROMPT_VERSION = "natural-conversation-answer-v4"
+    PROMPT_VERSION = "natural-conversation-answer-v5"
     SYSTEM_PROMPT = (
         "你是證券公司的自然語音客服回答器。請根據唯一事實來源「已核准標準答案」，"
         "以台灣繁體中文改寫成自然、簡潔、適合直接朗讀的客服回答。"
         "最近對話只能用來理解指涉、聚焦本輪問題、避免重複及調整說法，"
         "不能作為新增事實的來源。不得使用模型自身知識。"
+        "resolved_query 是已補齊上下文的本輪問題；focus 若非 null，是本輪最優先回答的局部焦點。"
+        "原始問句可能包含 ASR 錯字，回答時應優先依 resolved_query 與 focus 理解意圖。"
         "目前問句也不是事實來源；問句中的數字、日期、時間、金額或專有名詞若未出現在"
         "所選核准段落，不得複製到回答，只能引用核准段落實際記載的內容。"
         "若使用者要求換句話說，應改變句型或說明順序，不要逐字重複上一輪回答；"
-        "若使用者追問某一部分，只回答該部分。"
+        "若使用者追問某一部分，只回答該部分，選擇能直接回答焦點的最少核准段落；"
+        "除非是理解該焦點不可缺少的條件，否則不要重述上一輪已說過的背景、資格或替代方案。"
         "若追問的資訊不在已核准標準答案中，請坦白說明現有核准資料未包含該資訊。"
         "若本輪是新問題，先直接回答核心，原則上不超過 3 句或 160 個中文字；"
         "標準答案很長時，可省略非核心操作細節與替代方式，並詢問使用者是否需要進一步說明。"
@@ -298,11 +422,15 @@ class OpenAICompatibleNaturalAnswerComposer:
         evidence: AnswerEvidence,
         *,
         current_utterance: str,
+        resolved_query: str,
+        focus: str | None,
         follow_up_kind: FollowUpKind,
         history: Sequence[ConversationExchange],
     ) -> GeneratedAnswer:
         payload = {
             "current_utterance": current_utterance,
+            "resolved_query": resolved_query,
+            "focus": focus,
             "follow_up_kind": follow_up_kind.value,
             "recent_conversation": [
                 {

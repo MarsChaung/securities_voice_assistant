@@ -15,7 +15,25 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from observability import SafeAuditLogger
 
-from .conversation import ReplyMode
+from .conversation import ConversationResolution, FollowUpKind, ReplyMode
+
+VoiceAcknowledgementVariant = Literal[
+    "context_confirmation",
+    "follow_up_explanation",
+    "knowledge_lookup",
+]
+
+
+def select_voice_acknowledgement_variant(
+    conversation: ConversationResolution | None,
+    *,
+    conversation_pending: bool,
+) -> VoiceAcknowledgementVariant:
+    if conversation_pending or conversation is None:
+        return "context_confirmation"
+    if conversation.kind in {FollowUpKind.ELABORATE, FollowUpKind.REPHRASE}:
+        return "follow_up_explanation"
+    return "knowledge_lookup"
 
 BARGE_IN_PRESETS: tuple[dict[str, str | int | float], ...] = (
     {
@@ -88,9 +106,12 @@ def is_call_ending_utterance(text: str) -> bool:
     compact = re.sub(r"[\s，,、。！？!?；;：:]+", "", text).casefold()
     if compact in _CALL_ENDING_UTTERANCES:
         return True
+    filler = r"(?:呃+|嗯+|欸+|哎+|唉+|啊+|喔+|哦+|那個)*"
     return bool(
         re.fullmatch(
-            r"(?:好)?(?:沒(?:有)?問題了?|沒事(?:了|的)?)(?:拜拜|掰掰|再見)?",
+            rf"{filler}(?:好(?:了)?)?{filler}"
+            rf"(?:沒(?:有)?問題了?|沒事(?:了|的)?|先這樣|就這樣)"
+            rf"(?:謝謝(?:你|您)?|拜拜|掰掰|再見)*{filler}",
             compact,
         )
     )

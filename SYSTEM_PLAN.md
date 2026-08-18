@@ -128,9 +128,12 @@ MLX Audio 應繼續作為獨立推理服務，新專案以部署清單、容器�
 flowchart LR
     A["Web／電話語音"] --> B["ASR"]
     B --> C["個資與機敏資料偵測"]
-    C --> D["意圖與風險分類"]
-    D -->|"允許"| E["FAQ／核准知識檢索"]
-    D -->|"禁止／不確定"| H["拒答／官方管道／轉人工"]
+    C --> D["確定性政策檢查"]
+    D -->|"明確禁止／轉人工"| H["拒答／官方管道／轉人工"]
+    D --> R["Intent Router：意圖分類與風險註記"]
+    R -->|"申訴／爭議"| H
+    R --> E["FAQ／核准知識檢索"]
+    E -->|"無有效命中"| H
     E --> F["受控答案產生"]
     F --> G["答案安全與根據檢查"]
     G -->|"通過"| I["TTS"]
@@ -458,3 +461,57 @@ securities_voice_assistant/
 - 禁止意圖、prompt injection、個資、ASR 誤字與背景人聲評測達到 Phase 0 核准門檻。
 - 系統可隨時停用一般生成式回答，回退至純 FAQ 或固定訊息。
 - 法遵、資安、個資、稽核與業務負責人已完成內部 MVP 驗收。
+
+## 16. Intent Router 延後裁決與持續觀察（2026-08-12）
+
+### 16.1 決策背景
+
+Intent Router 使用 LLM 做結構化意圖分類，實測曾將「父母要帶什麼證件」誤標為
+`credential_or_sensitive_data`，即使前置個資防護未偵測到任何敏感資料，仍在知識檢索前以
+`LLM-RISK-001` 拒答。這類假陽性會降低核准知識的可用率，也讓 Intent Router 承擔超出分類職責的
+最終政策裁決。
+
+因此調整原則如下：
+
+- 個資與機敏資料防護仍在 LLM 與知識檢索前執行，命中時立即依 `PII-001` 中斷。
+- 確定性政策的明確拒答與轉人工規則維持最高優先序，不得被 Intent Router 覆寫。
+- Intent Router 的一般 risk flag 改為稽核註記，不再單獨觸發拒答。
+- `complaint_or_dispute` 保留立即轉人工，因為它是客服處理流程，不是知識不足問題。
+- Intent Router 必須提供明確、達信心門檻且非 `unknown` 的允許意圖，才可帶著風險註記進入檢索。
+- 帶風險註記的問題必須真正通過意圖過濾與檢索最低分數；不得在未命中時強制沿用上一輪知識。
+- 無有效知識命中時依 `KNO-001` 安全拒答；有命中時只能使用已發布核准答案，自然回答模式仍須通過
+  Output Guard。
+
+### 16.2 目標流程
+
+```text
+ASR
+→ 個資防護（命中即拒答）
+→ 確定性政策（明確禁止即拒答；明確申訴即轉人工）
+→ Intent Router（意圖、信心、risk flags）
+→ complaint_or_dispute：立即轉人工
+→ 其他 risk flags：只記錄，使用明確允許意圖進行真實知識檢索
+→ 無命中：KNO-001
+→ 有命中：核准答案／NaturalAnswerComposer
+→ Output Guard
+```
+
+### 16.3 必要回歸案例
+
+- 「父母要帶什麼證件」即使被註記 `credential_or_sensitive_data`，仍應命中未成年開戶知識並回答。
+- 實際輸入身分證號、帳號、密碼或 OTP，仍須在 Intent Router 前由 `PII-001` 阻擋。
+- 確定性交易執行、投資建議與個人帳務規則仍須維持原拒答或轉人工結果。
+- `complaint_or_dispute` 必須維持 `LLM-HANDOFF-001` 立即轉人工。
+- 帶 risk flag 且知識無命中時，必須以 `KNO-001` 拒答。
+- 帶 risk flag 的多輪追問若本輪沒有真實檢索命中，不得以 `CTX-FOLLOW-UP-001` 強制沿用前一知識。
+- risk flag、candidate intents、信心值、最終 policy rule ID 與 knowledge ID 必須保留於 audit log。
+
+### 16.4 持續觀察指標
+
+- 各 risk flag 的發生量、知識命中率與最終 answer／refuse／handoff 比例。
+- 「有 risk flag 但成功命中核准知識」案例的人工正確率。
+- `credential_or_sensitive_data` 假陽性率，特別觀察「證件、文件、材料、身分證明」等公開流程問題。
+- 帶 risk flag 的錯誤知識命中率與回答焦點偏差率。
+- `KNO-001`、`PII-001`、確定性拒答及申訴轉人工的回歸率。
+- 若出現個資漏攔、禁止意圖錯誤回答或帶 risk flag 的錯誤知識命中顯著上升，應立即回退為
+  Intent Router risk flag 直接拒答，並重新檢討門檻與評測集。

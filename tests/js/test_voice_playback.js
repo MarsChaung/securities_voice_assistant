@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   VoicePlaybackScheduler,
+  chooseNonRepeatingAudioUrl,
   recommendedInitialBufferSeconds,
   voiceFailureDisposition,
 } = require("../../services/orchestrator/src/orchestrator/static/voice-playback.js");
@@ -74,10 +75,11 @@ class FakeAudioContext {
 }
 
 test("scales the initial buffer for long answers and caps the delay", () => {
-  assert.equal(recommendedInitialBufferSeconds(20), 1.2);
-  assert.equal(recommendedInitialBufferSeconds(50), 2);
-  assert.equal(recommendedInitialBufferSeconds(100), 3);
-  assert.equal(recommendedInitialBufferSeconds(1000), 3);
+  assert.equal(recommendedInitialBufferSeconds(20), 0.96);
+  assert.equal(recommendedInitialBufferSeconds(50), 0.96);
+  assert.equal(recommendedInitialBufferSeconds(80), 1.2);
+  assert.equal(recommendedInitialBufferSeconds(100), 1.44);
+  assert.equal(recommendedInitialBufferSeconds(1000), 1.44);
 });
 
 test("does not report a service outage after the text answer is already visible", () => {
@@ -95,7 +97,32 @@ test("does not report a service outage after the text answer is already visible"
   );
 });
 
-test("starts buffered audio when the 2.8 second wait limit is reached", async () => {
+test("randomizes the first acknowledgement and avoids an immediate repeat", () => {
+  const candidates = ["confirm.mp3", "wait.wav"];
+
+  assert.equal(
+    chooseNonRepeatingAudioUrl(candidates, null, () => 0.99),
+    "wait.wav",
+  );
+  assert.equal(
+    chooseNonRepeatingAudioUrl(candidates, "wait.wav", () => 0.99),
+    "confirm.mp3",
+  );
+  assert.equal(
+    chooseNonRepeatingAudioUrl(candidates, "confirm.mp3", () => 0),
+    "wait.wav",
+  );
+});
+
+test("acknowledgement selection ignores empty and duplicate candidates", () => {
+  assert.equal(
+    chooseNonRepeatingAudioUrl([null, "confirm.mp3", "confirm.mp3"], null),
+    "confirm.mp3",
+  );
+  assert.equal(chooseNonRepeatingAudioUrl([], "confirm.mp3"), null);
+});
+
+test("starts buffered audio when the 1.6 second wait limit is reached", async () => {
   const context = new FakeAudioContext();
   let nowMs = 0;
   let initialWaitCallback = null;
@@ -115,13 +142,13 @@ test("starts buffered audio when the 2.8 second wait limit is reached", async ()
   scheduler.enqueue({ duration: 0.5 });
   assert.equal(context.sources.length, 0);
 
-  context.currentTime = 2.8;
-  nowMs = 2800;
+  context.currentTime = 1.6;
+  nowMs = 1600;
   initialWaitCallback();
   const metrics = await scheduler.finish();
 
   assert.equal(context.sources.length, 1);
-  assert.equal(metrics.first_playback_delay_ms, 2800);
+  assert.equal(metrics.first_playback_delay_ms, 1600);
 });
 
 test("starts the first audio immediately when it arrives after the wait limit", async () => {
@@ -148,7 +175,7 @@ test("starts the first audio immediately when it arrives after the wait limit", 
   assert.equal(context.sources.length, 1);
 });
 
-test("buffers 1.2 seconds and crossfades adjacent chunks without gaps", async () => {
+test("buffers about one second and crossfades adjacent chunks without gaps", async () => {
   const context = new FakeAudioContext();
   const activeSources = new Set();
   let nowMs = 0;
@@ -165,7 +192,7 @@ test("buffers 1.2 seconds and crossfades adjacent chunks without gaps", async ()
   context.currentTime = 0.7;
   nowMs = 700;
   scheduler.enqueue({ duration: 0.5 }, { arrivalTimeMs: nowMs });
-  assert.equal(context.sources.length, 0);
+  assert.equal(context.sources.length, 2);
 
   context.currentTime = 1.1;
   nowMs = 1100;
@@ -173,7 +200,7 @@ test("buffers 1.2 seconds and crossfades adjacent chunks without gaps", async ()
   const metrics = await scheduler.finish();
 
   assert.equal(context.sources.length, 3);
-  assert.equal(metrics.initial_buffered_ms, 1500);
+  assert.equal(metrics.initial_buffered_ms, 1000);
   assert.equal(metrics.underrun_count, 0);
   assert.equal(context.sources[1].startedAt - context.sources[0].startedAt, 0.492);
   assert.deepEqual(context.gains[1].gain.events.map((event) => event[0]), [

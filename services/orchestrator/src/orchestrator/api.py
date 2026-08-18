@@ -1,8 +1,10 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -60,11 +62,26 @@ from .voice import (
     is_call_ending_utterance,
     ndjson_event,
     realtime_asr_url,
+    select_voice_acknowledgement_variant,
     split_tts_text,
 )
 
 _PACKAGE_ROOT = Path(__file__).parent
-_PILOT_ASSET_VERSION = "20260811.2"
+_PILOT_ASSET_VERSION = "20260817.1"
+_VOICE_ACKNOWLEDGEMENT_AUDIO_URLS = {
+    "context_confirmation": (
+        f"/pilot/static/audio/acknowledgement-confirm.mp3?v={_PILOT_ASSET_VERSION}"
+    ),
+    "context_wait": (
+        f"/pilot/static/audio/voice-acknowledgement.wav?v={_PILOT_ASSET_VERSION}"
+    ),
+    "follow_up_explanation": (
+        f"/pilot/static/audio/acknowledgement-explain.mp3?v={_PILOT_ASSET_VERSION}"
+    ),
+    "knowledge_lookup": (
+        f"/pilot/static/audio/acknowledgement-lookup.mp3?v={_PILOT_ASSET_VERSION}"
+    ),
+}
 
 
 def _build_knowledge_retriever(
@@ -446,6 +463,10 @@ def create_app(
                 "asr_models": asr_models,
                 "asr_context": resolved_service.voice_asr_context(),
                 "asr_endpoint_grace_ms": resolved_settings.asr_endpoint_grace_ms,
+                "acknowledgement": {
+                    "audio_urls": _VOICE_ACKNOWLEDGEMENT_AUDIO_URLS,
+                    "delay_ms": resolved_settings.voice_acknowledgement_delay_ms,
+                },
                 "barge_in": {
                     "enabled": resolved_settings.barge_in_enabled,
                     "default_mode": resolved_settings.barge_in_default_mode,
@@ -502,27 +523,10 @@ def create_app(
             )
 
         session_id = str(request.conversation_id) if request.conversation_id is not None else None
-        conversation = resolve_conversation(
-            transcript=request.transcript,
-            reply_mode=request.reply_mode,
-            session_id=session_id,
-        )
         turn_request = TurnRequest(transcript=request.transcript, channel="voice")
+        preflight = resolved_service.preflight(turn_request)
 
-        turn = await run_in_threadpool(
-            resolved_service.evaluate,
-            turn_request,
-            conversation=conversation,
-        )
-        record_session_turn(
-            request=turn_request,
-            reply_mode=request.reply_mode,
-            session_id=session_id,
-            conversation=conversation,
-            turn=turn,
-        )
-
-        async def stream() -> AsyncIterator[bytes]:
+        async def emit_turn_and_audio(turn: TurnResponse) -> AsyncIterator[bytes]:
             yield ndjson_event(
                 {
                     "type": "turn",
@@ -534,6 +538,140 @@ def create_app(
                 turn_id=turn.turn_id,
                 answer=turn.result.answer,
             ):
+                yield event
+
+        if request.reply_mode is ReplyMode.NATURAL:
+            end_to_end_started_at = perf_counter()
+
+            conversation_task = asyncio.create_task(
+                run_in_threadpool(
+                    resolve_conversation,
+                    transcript=request.transcript,
+                    reply_mode=request.reply_mode,
+                    session_id=session_id,
+                )
+            )
+            intent_task = asyncio.create_task(
+                run_in_threadpool(
+                    resolved_service.prefetch_intent_route,
+                    turn_request,
+                    preflight=preflight,
+                )
+            )
+
+            async def resolve_natural_turn() -> tuple[ConversationResolution, TurnResponse]:
+                conversation, prefetched_intent_route = await asyncio.gather(
+                    conversation_task,
+                    intent_task,
+                )
+                assert conversation is not None
+                turn = await run_in_threadpool(
+                    resolved_service.evaluate,
+                    turn_request,
+                    conversation=conversation,
+                    preflight=preflight,
+                    prefetched_intent_route=prefetched_intent_route,
+                    end_to_end_started_at=end_to_end_started_at,
+                )
+                return conversation, turn
+
+            turn_task = asyncio.create_task(resolve_natural_turn())
+
+            async def natural_stream() -> AsyncIterator[bytes]:
+                resolved: tuple[ConversationResolution, TurnResponse] | None = None
+                acknowledgement_variant: str | None = None
+                try:
+                    if preflight.allows_acknowledgement:
+                        try:
+                            resolved = await asyncio.wait_for(
+                                asyncio.shield(turn_task),
+                                timeout=(
+                                    resolved_settings.voice_acknowledgement_delay_ms / 1_000
+                                ),
+                            )
+                        except TimeoutError:
+                            conversation_pending = not conversation_task.done()
+                            acknowledgement_conversation = None
+                            if (
+                                not conversation_pending
+                                and not conversation_task.cancelled()
+                                and conversation_task.exception() is None
+                            ):
+                                acknowledgement_conversation = conversation_task.result()
+                            acknowledgement_variant = (
+                                select_voice_acknowledgement_variant(
+                                    acknowledgement_conversation,
+                                    conversation_pending=conversation_pending,
+                                )
+                            )
+                            acknowledgement_event: dict[str, object] = {
+                                "type": "acknowledgement",
+                                "variant": acknowledgement_variant,
+                                "audio_url": _VOICE_ACKNOWLEDGEMENT_AUDIO_URLS[
+                                    acknowledgement_variant
+                                ],
+                            }
+                            if acknowledgement_variant == "context_confirmation":
+                                acknowledgement_event["audio_urls"] = [
+                                    _VOICE_ACKNOWLEDGEMENT_AUDIO_URLS[
+                                        "context_confirmation"
+                                    ],
+                                    _VOICE_ACKNOWLEDGEMENT_AUDIO_URLS["context_wait"],
+                                ]
+                            yield ndjson_event(acknowledgement_event)
+                    if resolved is None:
+                        resolved = await turn_task
+                    conversation, turn = resolved
+                    if acknowledgement_variant is not None:
+                        resolved_diagnostic_logger.acknowledgement(
+                            session_id=session_id,
+                            variant=acknowledgement_variant,
+                            triggered_after_ms=(
+                                resolved_settings.voice_acknowledgement_delay_ms
+                            ),
+                            answer_ready_after_ms=(
+                                (perf_counter() - end_to_end_started_at) * 1_000
+                            ),
+                        )
+                    record_session_turn(
+                        request=turn_request,
+                        reply_mode=request.reply_mode,
+                        session_id=session_id,
+                        conversation=conversation,
+                        turn=turn,
+                    )
+                    async for event in emit_turn_and_audio(turn):
+                        yield event
+                finally:
+                    if not turn_task.done():
+                        turn_task.cancel()
+                    if not conversation_task.done():
+                        conversation_task.cancel()
+                    if not intent_task.done():
+                        intent_task.cancel()
+
+            return StreamingResponse(
+                natural_stream(),
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        turn = await run_in_threadpool(
+            resolved_service.evaluate,
+            turn_request,
+            conversation=None,
+            preflight=preflight,
+        )
+        record_session_turn(
+            request=turn_request,
+            reply_mode=request.reply_mode,
+            session_id=session_id,
+            conversation=None,
+            turn=turn,
+        )
+
+        async def stream() -> AsyncIterator[bytes]:
+            async for event in emit_turn_and_audio(turn):
                 yield event
 
         return StreamingResponse(

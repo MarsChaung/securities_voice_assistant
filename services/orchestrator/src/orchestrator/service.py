@@ -8,7 +8,13 @@ from uuid import uuid4
 
 from answer_contract import AnswerContract, Citation, Decision, TurnRequest, TurnResponse
 from observability import SafeAuditLogger
-from policy import DomainPolicyEngine, PolicyAction, PolicyResult, SensitiveDataGuard
+from policy import (
+    DomainPolicyEngine,
+    GuardResult,
+    PolicyAction,
+    PolicyResult,
+    SensitiveDataGuard,
+)
 from retrieval import (
     KnowledgeDocument,
     KnowledgeRepositoryError,
@@ -30,6 +36,7 @@ from .asr import MandarinPhoneticResolver, build_asr_context
 from .conversation import ConversationResolution, FollowUpKind, ReplyMode
 from .intent_routing import (
     IntentRouter,
+    IntentRouteResult,
     IntentRouterMode,
     IntentRoutingError,
 )
@@ -87,8 +94,23 @@ class IntentRoutingTrace:
     fallback_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class PrefetchedIntentRoute:
+    question: str
+    result: IntentRouteResult | None
+    fallback_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class TurnPreflight:
+    guard_result: GuardResult
+    policy_result: PolicyResult | None
+    allows_acknowledgement: bool
+
+
 @dataclass
 class TurnTimingTrace:
+    end_to_end_started_at: float | None = None
     conversation_resolution_latency_ms: float | None = None
     conversation_semantic_latency_ms: float | None = None
     policy_guard_latency_ms: float | None = None
@@ -96,7 +118,7 @@ class TurnTimingTrace:
 
 
 class TurnService:
-    _NEW_QUESTION_CONTEXT_BONUS = 0.05
+    _NEW_QUESTION_CONTEXT_BONUS = 0.08
 
     def __init__(
         self,
@@ -225,6 +247,9 @@ class TurnService:
         request: TurnRequest,
         *,
         conversation: ConversationResolution | None = None,
+        preflight: TurnPreflight | None = None,
+        prefetched_intent_route: PrefetchedIntentRoute | None = None,
+        end_to_end_started_at: float | None = None,
     ) -> TurnResponse:
         started_at = perf_counter()
         turn_id = str(uuid4())
@@ -235,6 +260,7 @@ class TurnService:
         )
         intent_routing = IntentRoutingTrace(mode=self._intent_router_mode.value)
         timing = TurnTimingTrace(
+            end_to_end_started_at=end_to_end_started_at,
             conversation_resolution_latency_ms=(
                 conversation.resolution_latency_ms if conversation is not None else None
             ),
@@ -242,7 +268,8 @@ class TurnService:
                 conversation.semantic_latency_ms if conversation is not None else None
             ),
         )
-        guard_result = self._sensitive_data_guard.scan(request.transcript)
+        resolved_preflight = preflight or self.preflight(request)
+        guard_result = resolved_preflight.guard_result
 
         if guard_result.has_sensitive_data:
             timing.policy_guard_latency_ms = (perf_counter() - started_at) * 1_000
@@ -269,7 +296,8 @@ class TurnService:
             return TurnResponse(turn_id=turn_id, result=result)
 
         policy_question = request.transcript
-        policy_result = self._policy_engine.classify(policy_question)
+        policy_result = resolved_preflight.policy_result
+        assert policy_result is not None
         if (
             conversation is not None
             and conversation.kind is not FollowUpKind.NEW_QUESTION
@@ -281,9 +309,14 @@ class TurnService:
                 policy_question = conversation.retrieval_query
         timing.policy_guard_latency_ms = (perf_counter() - started_at) * 1_000
         if self._can_use_intent_router(policy_result):
+            reusable_intent_route = self._reusable_prefetched_intent_route(
+                prefetched=prefetched_intent_route,
+                question=policy_question,
+            )
             policy_result, intent_routing = self._route_intent(
                 question=policy_question,
                 deterministic_result=policy_result,
+                prefetched=reusable_intent_route,
             )
         error_type: str | None = None
 
@@ -311,6 +344,9 @@ class TurnService:
                     intent=policy_result.intent,
                     policy_rule_id=policy_result.policy_rule_id,
                     conversation=conversation,
+                    allow_conversation_reference_fallback=not (
+                        intent_routing.applied and bool(intent_routing.risk_flags)
+                    ),
                     timing=timing,
                 )
                 result = outcome.result
@@ -356,24 +392,104 @@ class TurnService:
             return False
         return not policy_result.policy_rule_id.startswith("POL-REFUSE-")
 
+    def preflight(self, request: TurnRequest) -> TurnPreflight:
+        guard_result = self._sensitive_data_guard.scan(request.transcript)
+        if guard_result.has_sensitive_data:
+            return TurnPreflight(
+                guard_result=guard_result,
+                policy_result=None,
+                allows_acknowledgement=False,
+            )
+        policy_result = self._policy_engine.classify(request.transcript)
+        return TurnPreflight(
+            guard_result=guard_result,
+            policy_result=policy_result,
+            allows_acknowledgement=(
+                policy_result.action is not PolicyAction.HANDOFF
+                and not policy_result.policy_rule_id.startswith("POL-REFUSE-")
+            ),
+        )
+
+    def prefetch_intent_route(
+        self,
+        request: TurnRequest,
+        *,
+        preflight: TurnPreflight | None = None,
+    ) -> PrefetchedIntentRoute | None:
+        resolved_preflight = preflight or self.preflight(request)
+        if resolved_preflight.guard_result.has_sensitive_data:
+            return None
+        policy_result = resolved_preflight.policy_result
+        assert policy_result is not None
+        if not self._can_use_intent_router(policy_result):
+            return None
+        if self._intent_router is None:
+            return PrefetchedIntentRoute(
+                question=request.transcript,
+                result=None,
+                fallback_reason="router_unavailable",
+            )
+        try:
+            result = self._intent_router.route(request.transcript)
+        except IntentRoutingError:
+            return PrefetchedIntentRoute(
+                question=request.transcript,
+                result=None,
+                fallback_reason="routing_error",
+            )
+        return PrefetchedIntentRoute(question=request.transcript, result=result)
+
+    def _reusable_prefetched_intent_route(
+        self,
+        *,
+        prefetched: PrefetchedIntentRoute | None,
+        question: str,
+    ) -> PrefetchedIntentRoute | None:
+        if prefetched is None:
+            return None
+        if prefetched.question == question:
+            return prefetched
+        if prefetched.result is None:
+            return None
+        classification = prefetched.result.classification
+        if "complaint_or_dispute" in classification.risk_flags:
+            return prefetched
+        if (
+            classification.needs_clarification
+            or classification.confidence < self._intent_router_minimum_confidence
+            or classification.candidate_intents[0] == "unknown"
+        ):
+            return None
+        return prefetched
+
     def _route_intent(
         self,
         *,
         question: str,
         deterministic_result: PolicyResult,
+        prefetched: PrefetchedIntentRoute | None = None,
     ) -> tuple[PolicyResult, IntentRoutingTrace]:
+        if prefetched is not None and prefetched.result is None:
+            return deterministic_result, IntentRoutingTrace(
+                mode=self._intent_router_mode.value,
+                fallback_reason=prefetched.fallback_reason,
+            )
         if self._intent_router is None:
             return deterministic_result, IntentRoutingTrace(
                 mode=self._intent_router_mode.value,
                 fallback_reason="router_unavailable",
             )
-        try:
-            route = self._intent_router.route(question)
-        except IntentRoutingError:
-            return deterministic_result, IntentRoutingTrace(
-                mode=self._intent_router_mode.value,
-                fallback_reason="routing_error",
-            )
+        if prefetched is not None:
+            assert prefetched.result is not None
+            route = prefetched.result
+        else:
+            try:
+                route = self._intent_router.route(question)
+            except IntentRoutingError:
+                return deterministic_result, IntentRoutingTrace(
+                    mode=self._intent_router_mode.value,
+                    fallback_reason="routing_error",
+                )
 
         classification = route.classification
         trace = IntentRoutingTrace(
@@ -388,13 +504,12 @@ class TurnService:
         )
         if self._intent_router_mode is IntentRouterMode.SHADOW:
             return deterministic_result, trace
-        if classification.risk_flags:
-            is_complaint = "complaint_or_dispute" in classification.risk_flags
+        if "complaint_or_dispute" in classification.risk_flags:
             return (
                 PolicyResult(
-                    action=(PolicyAction.HANDOFF if is_complaint else PolicyAction.REFUSE),
-                    intent=("complaint_or_dispute" if is_complaint else "intent_risk_detected"),
-                    policy_rule_id=("LLM-HANDOFF-001" if is_complaint else "LLM-RISK-001"),
+                    action=PolicyAction.HANDOFF,
+                    intent="complaint_or_dispute",
+                    policy_rule_id="LLM-HANDOFF-001",
                     confidence=classification.confidence,
                 ),
                 replace(trace, applied=True),
@@ -423,7 +538,11 @@ class TurnService:
             PolicyResult(
                 action=PolicyAction.ALLOW,
                 intent=intent,
-                policy_rule_id="LLM-ALLOW-001",
+                policy_rule_id=(
+                    "LLM-ALLOW-RISK-NOTED-001"
+                    if classification.risk_flags
+                    else "LLM-ALLOW-001"
+                ),
                 confidence=classification.confidence,
             ),
             replace(trace, applied=True),
@@ -437,6 +556,7 @@ class TurnService:
         intent: str,
         policy_rule_id: str,
         conversation: ConversationResolution | None,
+        allow_conversation_reference_fallback: bool,
         timing: TurnTimingTrace,
     ) -> KnowledgeAnswerOutcome:
         generation = GenerationTrace(
@@ -471,6 +591,7 @@ class TurnService:
                 )
                 if (
                     match is None
+                    and allow_conversation_reference_fallback
                     and conversation is not None
                     and conversation.kind is not FollowUpKind.NEW_QUESTION
                     and conversation.reference_knowledge_id is not None
@@ -824,6 +945,8 @@ class TurnService:
             focus_approved_answer(
                 standard_answer=evidence.standard_answer,
                 current_utterance=current_utterance,
+                resolved_query=conversation.retrieval_query,
+                focus=conversation.focus,
             )
             if conversation.kind is FollowUpKind.ELABORATE
             else None
@@ -850,6 +973,8 @@ class TurnService:
             generated = self._natural_answer_composer.compose(
                 generation_evidence,
                 current_utterance=current_utterance,
+                resolved_query=conversation.retrieval_query,
+                focus=conversation.focus,
                 follow_up_kind=conversation.kind,
                 history=(
                     ()
@@ -926,6 +1051,11 @@ class TurnService:
         timing: TurnTimingTrace,
     ) -> None:
         total_latency_ms = (perf_counter() - started_at) * 1_000
+        end_to_end_latency_ms = (
+            (perf_counter() - timing.end_to_end_started_at) * 1_000
+            if timing.end_to_end_started_at is not None
+            else total_latency_ms + (timing.conversation_resolution_latency_ms or 0)
+        )
         self._audit_logger.turn_decision(
             turn_id=turn_id,
             decision=result.decision.value,
@@ -937,9 +1067,7 @@ class TurnService:
             input_character_count=len(request.transcript),
             output_character_count=len(result.answer),
             total_latency_ms=total_latency_ms,
-            end_to_end_latency_ms=(
-                total_latency_ms + (timing.conversation_resolution_latency_ms or 0)
-            ),
+            end_to_end_latency_ms=end_to_end_latency_ms,
             conversation_resolution_latency_ms=(
                 timing.conversation_resolution_latency_ms
             ),

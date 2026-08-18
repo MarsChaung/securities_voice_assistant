@@ -23,6 +23,8 @@
 
 插話模式為 `sensitive`、`standard`、`resistant` 三組受控 preset，預設由 `SVA_BARGE_IN_DEFAULT_MODE` 決定，工作階段開始前可於 Web Pilot 切換。瀏覽器不提供任意數值輸入，避免未經校準的參數進入正式服務。
 
+自然對話先執行可重用的 deterministic preflight。只有未命中個資、強制拒答或轉人工，且正式回答在預設 450ms 內尚未完成時，後端才送出 `acknowledgement` 事件。瀏覽器預載固定提示音：新問題使用 `knowledge_lookup`、深入說明或換句話說使用 `follow_up_explanation`；450ms 內尚未取得對話分類時，從兩個中性的 `context_confirmation` 音檔隨機選擇，且同一通話不連續重複。提示音完整播放後才排入正式 TTS，避免兩段語音重疊；完整知識驗證與 Output Guard 維持不變。
+
 明確結束語（例如「沒問題了」、「沒事了」、「再見」）不進入一般知識與意圖路由，後端只串流固定結束語「謝謝您的來電，祝您順心，再見」，播放完成後由瀏覽器結束通話。
 
 語音客服測試可在通話前選擇「核准原文」或後端明確啟用的「自然對話」。自然對話

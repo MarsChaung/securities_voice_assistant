@@ -101,7 +101,7 @@ class _ChatCompletion(BaseModel):
 
 
 class OpenAICompatibleConversationSemanticAnalyzer:
-    PROMPT_VERSION = "conversation-semantic-v2"
+    PROMPT_VERSION = "conversation-semantic-v3"
     SYSTEM_PROMPT = """你是證券語音客服的對話語意解析器，只能解析，不得回答問題。
 根據目前問句與最近對話，判斷目前問句是新問題、針對既有回答的局部追問，或要求換句話說。
 不可只靠固定關鍵字；要理解省略主詞、代名詞、期間、條件及口語改述。
@@ -113,6 +113,9 @@ rewritten_query 必須把省略的主題補成可獨立檢索的完整問句，�
 focus 簡短描述本輪希望了解的局部資訊；若是新問題或沒有明確焦點可為 null。
 相同 knowledge_id 的連續輪次代表同一個治理知識主題；目前問句若延伸詢問該主題的條件、
 限制或後續處理，應判為 elaborate，不可只因最近一輪聚焦時間或操作步驟就判成新問題。
+「那、那我、所以、如果、另外」等承接語本身不代表新問題。若目前問句詢問最近回答剛提到的
+動作、管道或名詞，例如回答提到現股當沖需線上簽署，下一句問「那我想線上簽署，要怎麼操作」，
+應判為 elaborate，並將省略的現股當沖主題補入 rewritten_query。
 若無法可靠判斷，使用 new_question 並降低 confidence。只輸出符合 strict JSON schema 的物件。
 
 範例：最近 T1 討論銷戶，使用者問「那三個月後能再線上辦嗎？」時，kind=elaborate、

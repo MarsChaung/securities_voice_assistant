@@ -24,6 +24,12 @@ from orchestrator.intent_routing import (
 )
 from orchestrator.service import TurnService
 from orchestrator.shadow import ShadowAnswerTask, ShadowSubmitStatus
+from policy import (
+    DomainPolicyEngine,
+    GuardResult,
+    PolicyResult,
+    SensitiveDataGuard,
+)
 from retrieval import (
     ASRTerm,
     HybridKnowledgeRetriever,
@@ -154,6 +160,8 @@ class StaticNaturalAnswerComposer:
         evidence: AnswerEvidence,
         *,
         current_utterance: str,
+        resolved_query: str,
+        focus: str | None,
         follow_up_kind: FollowUpKind,
         history: Sequence[ConversationExchange],
     ) -> GeneratedAnswer:
@@ -161,6 +169,8 @@ class StaticNaturalAnswerComposer:
             {
                 "evidence": evidence,
                 "current_utterance": current_utterance,
+                "resolved_query": resolved_query,
+                "focus": focus,
                 "follow_up_kind": follow_up_kind,
                 "history": tuple(history),
             }
@@ -275,6 +285,14 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
     playback_script = client.get("/pilot/static/voice-playback.js")
     barge_in_script = client.get("/pilot/static/voice-barge-in.js")
     capture_worklet = client.get("/pilot/static/voice-capture-worklet.js")
+    acknowledgement_audio = [
+        client.get("/pilot/static/audio/acknowledgement-confirm.mp3"),
+        client.get("/pilot/static/audio/acknowledgement-explain.mp3"),
+        client.get("/pilot/static/audio/acknowledgement-lookup.mp3"),
+    ]
+    acknowledgement_wav = client.get(
+        "/pilot/static/audio/voice-acknowledgement.wav"
+    )
 
     assert redirect.status_code == 307
     assert redirect.headers["location"] == "/pilot"
@@ -287,6 +305,15 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
     assert playback_script.status_code == 200
     assert barge_in_script.status_code == 200
     assert capture_worklet.status_code == 200
+    assert all(response.status_code == 200 for response in acknowledgement_audio)
+    assert acknowledgement_wav.status_code == 200
+    assert all(
+        response.headers["content-type"] == "audio/mpeg"
+        for response in acknowledgement_audio
+    )
+    assert all(response.content.startswith(b"ID3") for response in acknowledgement_audio)
+    assert acknowledgement_wav.headers["content-type"] == "audio/x-wav"
+    assert acknowledgement_wav.content.startswith(b"RIFF")
     assert "voice-playback.js?v=" in page.text
     assert "voice-barge-in.js?v=" in page.text
     assert "pilot.js?v=" in page.text
@@ -294,6 +321,8 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
     assert "numberOfOutputs: 0" in script.text
     assert "silentGain" not in script.text
     assert "VoiceBargeIn.isNonActionableUtterance(transcript)" in script.text
+    assert 'event.type === "acknowledgement"' in script.text
+    assert 'cache: "force-cache"' in script.text
     assert "localStorage" not in script.text
 
 
@@ -683,6 +712,7 @@ def test_natural_generation_uses_conversation_and_preserves_knowledge_identity()
             kind=FollowUpKind.ELABORATE,
             retrieval_query="什麼是台股定期定額？；使用者追問：剛才那一段再說詳細一點",
             history=history,
+            focus="台股定期定額的詳細說明",
         ),
     )
 
@@ -692,6 +722,10 @@ def test_natural_generation_uses_conversation_and_preserves_knowledge_identity()
     assert result.answer_id == document.item.knowledge_id
     assert result.knowledge_versions == [document.item.version]
     assert composer.calls[0]["current_utterance"] == "剛才那一段再說詳細一點"
+    assert composer.calls[0]["resolved_query"] == (
+        "什麼是台股定期定額？；使用者追問：剛才那一段再說詳細一點"
+    )
+    assert composer.calls[0]["focus"] == "台股定期定額的詳細說明"
     assert composer.calls[0]["follow_up_kind"] is FollowUpKind.ELABORATE
     assert composer.calls[0]["history"] == history
 
@@ -814,6 +848,63 @@ def test_natural_focused_follow_up_falls_back_to_relevant_approved_excerpt() -> 
             kind=FollowUpKind.ELABORATE,
             retrieval_query=(
                 "什麼是台股定期定額？；使用者追問：辦理時間是幾點到幾點？"
+            ),
+            history=history,
+            reference_knowledge_id=document.item.knowledge_id,
+        ),
+    )
+
+    assert response.result.answer == focused_answer
+    evidence = composer.calls[0]["evidence"]
+    assert isinstance(evidence, AnswerEvidence)
+    assert evidence.standard_answer == focused_answer
+
+
+def test_natural_online_operation_follow_up_keeps_multiline_section() -> None:
+    base = published_document()
+    focused_answer = (
+        "一、線上申請（交易日上午8點15分至下午2點）\n"
+        "打開【國泰證券App】，點下方【我的】，點選右上圓形圖示，"
+        "點選【帳戶資訊】，再點選註銷。"
+    )
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "standard_answer": (
+                    "你可以線上或臨櫃申請註銷證券帳戶。\n"
+                    f"{focused_answer}\n"
+                    "二、臨櫃申請：請攜帶身分證到任一分公司辦理。"
+                )
+            }
+        ),
+        source=base.source,
+    )
+    composer = StaticNaturalAnswerComposer(fail=True)
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=composer,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    history = (
+        ConversationExchange(
+            user_utterance="如果我要線上註銷帳戶，要怎麼操作？",
+            resolved_query="註銷證券帳戶要怎麼線上操作？",
+            assistant_answer="您可以透過線上或臨櫃申請註銷證券帳戶。",
+            decision="answer",
+            knowledge_id=document.item.knowledge_id,
+            knowledge_version=document.item.version,
+        ),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="那操作步驟是什麼？",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query=(
+                "註銷證券帳戶要怎麼線上操作？；使用者追問：那操作步驟是什麼？"
             ),
             history=history,
             reference_knowledge_id=document.item.knowledge_id,
@@ -996,6 +1087,69 @@ def test_semantic_new_question_can_recover_a_competitive_recent_knowledge_match(
     )
 
     assert response.result.answer_id == closure_document.item.knowledge_id
+
+
+def test_semantic_new_question_keeps_recent_topic_for_ambiguous_online_signing() -> None:
+    base = published_document()
+    day_trading_document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-DAY-TRADING",
+                "title": "現股當沖",
+                "standard_answer": "符合資格後可在線上簽署現股當沖契約書。",
+            }
+        ),
+        source=base.source,
+    )
+    generic_signing_document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-GENERIC-SIGNING",
+                "title": "線上簽署文件",
+                "standard_answer": "可在App查詢線上簽署文件。",
+            }
+        ),
+        source=base.source,
+    )
+    retriever = NewQuestionReferenceRetriever(
+        original_match=RetrievalMatch(document=generic_signing_document, score=0.5501),
+        reference_match=RetrievalMatch(document=day_trading_document, score=0.4832),
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository(
+            (day_trading_document, generic_signing_document)
+        ),
+        knowledge_retriever=retriever,
+        natural_answer_composer=StaticNaturalAnswerComposer(),
+        intent_router_mode="controlled",
+        intent_router=StaticIntentRouter(candidate_intents=["account_opening_general"]),
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    history = (
+        ConversationExchange(
+            user_utterance="我要怎麼申請現股當沖？",
+            resolved_query="如何申請現股當沖",
+            assistant_answer="符合資格後請進行線上簽署。",
+            decision="answer",
+            knowledge_id=day_trading_document.item.knowledge_id,
+            knowledge_version=day_trading_document.item.version,
+        ),
+    )
+
+    response = service.evaluate(
+        request=TurnRequest(
+            transcript="那我想申請線上簽署，要怎麼操作？",
+            channel="voice",
+        ),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.NEW_QUESTION,
+            retrieval_query="那我想申請線上簽署，要怎麼操作？",
+            history=history,
+            semantic_confidence=0.95,
+        ),
+    )
+
+    assert response.result.answer_id == day_trading_document.item.knowledge_id
 
 
 def test_semantic_new_question_does_not_stick_to_a_weak_recent_topic() -> None:
@@ -1565,12 +1719,203 @@ def test_intent_router_failure_falls_back_to_deterministic_policy() -> None:
     assert response.json()["result"]["policy_rule_id"] == "POL-DEFAULT-DENY"
 
 
-def test_intent_router_risk_flag_can_only_make_the_decision_more_conservative() -> None:
+def test_confident_prefetched_intent_is_reused_after_context_resolution() -> None:
+    document = published_document()
+    router = StaticIntentRouter(candidate_intents=["general_securities_knowledge"])
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=StaticNaturalAnswerComposer(),
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    request = TurnRequest(transcript="什麼是台股定期定額？", channel="voice")
+
+    prefetched = service.prefetch_intent_route(request)
+    response = service.evaluate(
+        request,
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query="請詳細說明台股定期定額",
+            history=(),
+            reference_knowledge_id=document.item.knowledge_id,
+        ),
+        prefetched_intent_route=prefetched,
+    )
+
+    assert response.result.decision.value == "answer"
+    assert router.questions == [request.transcript]
+
+
+def test_evaluate_reuses_preflight_security_results() -> None:
+    class CountingSensitiveDataGuard(SensitiveDataGuard):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def scan(self, text: str) -> GuardResult:
+            self.calls += 1
+            return super().scan(text)
+
+    class CountingPolicyEngine(DomainPolicyEngine):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def classify(self, text: str) -> PolicyResult:
+            self.calls += 1
+            return super().classify(text)
+
+    guard = CountingSensitiveDataGuard()
+    policy = CountingPolicyEngine()
+    service = TurnService(sensitive_data_guard=guard, policy_engine=policy)
+    request = TurnRequest(transcript="什麼是台股定期定額？", channel="voice")
+
+    preflight = service.preflight(request)
+    service.evaluate(request, preflight=preflight)
+
+    assert preflight.allows_acknowledgement is True
+    assert guard.calls == 1
+    assert policy.calls == 1
+
+
+def test_unknown_prefetched_intent_is_rerouted_after_context_resolution() -> None:
+    document = published_document()
+
+    class SequencedIntentRouter:
+        def __init__(self) -> None:
+            self.questions: list[str] = []
+
+        def route(self, question: str) -> IntentRouteResult:
+            self.questions.append(question)
+            candidate_intent = (
+                "unknown"
+                if len(self.questions) == 1
+                else "general_securities_knowledge"
+            )
+            return IntentRouteResult(
+                classification=IntentClassification.model_validate(
+                    {
+                        "candidate_intents": [candidate_intent],
+                        "confidence": 0.95,
+                        "risk_flags": [],
+                        "needs_clarification": False,
+                    }
+                ),
+                model_id="synthetic-intent-model",
+                prompt_version="intent-router-v3",
+                prompt_hash="b" * 64,
+                latency_ms=9.5,
+            )
+
+    router = SequencedIntentRouter()
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=StaticNaturalAnswerComposer(),
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    request = TurnRequest(transcript="那這個呢？", channel="voice")
+
+    prefetched = service.prefetch_intent_route(request)
+    response = service.evaluate(
+        request,
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query="什麼是台股定期定額？",
+            history=(),
+            reference_knowledge_id=document.item.knowledge_id,
+        ),
+        prefetched_intent_route=prefetched,
+    )
+
+    assert response.result.decision.value == "answer"
+    assert router.questions == [request.transcript, "什麼是台股定期定額？"]
+
+
+def test_prefetch_skips_intent_router_when_sensitive_data_is_detected() -> None:
+    router = StaticIntentRouter(candidate_intents=["general_securities_knowledge"])
+    service = TurnService(intent_router_mode="controlled", intent_router=router)
+
+    prefetched = service.prefetch_intent_route(
+        TurnRequest(transcript="我的驗證碼是 123456", channel="voice")
+    )
+
+    assert prefetched is None
+    assert router.questions == []
+
+
+@pytest.mark.parametrize(
+    "risk_flag",
+    [
+        "transaction_execution",
+        "personal_account_or_status",
+        "investment_advice",
+        "credential_or_sensitive_data",
+        "out_of_scope",
+    ],
+)
+def test_intent_router_risk_flag_allows_a_grounded_knowledge_answer(
+    caplog: pytest.LogCaptureFixture,
+    risk_flag: str,
+) -> None:
+    base = published_document()
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-MINOR-ACCOUNT-DOCUMENTS",
+                "title": "未成年人開戶應備證件",
+                "standard_answer": "未成年人及父母雙方需備妥身分證、健保卡及印章。",
+                "allowed_intents": ["account_opening_general"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="minor-parent-documents",
+                        question_text="父母要帶什麼證件",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base.source,
+    )
+    router = StaticIntentRouter(
+        candidate_intents=["account_opening_general"],
+        risk_flags=[risk_flag],
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    with caplog.at_level(logging.INFO, logger="sva.audit"):
+        response = make_client(service).post(
+            "/v1/turns/evaluate",
+            json={"transcript": "哎，你剛說父母要帶什麼證件？", "channel": "web"},
+        )
+
+    result = response.json()["result"]
+    assert result["decision"] == "answer"
+    assert result["policy_rule_id"] == "LLM-ALLOW-RISK-NOTED-001"
+    assert result["answer_id"] == document.item.knowledge_id
+    event_record = next(
+        record for record in caplog.records if "turn_decision" in record.message
+    )
+    event = json.loads(event_record.getMessage().removeprefix("turn_decision "))
+    assert event["intent_risk_flags"] == [risk_flag]
+    assert event["intent_router_applied"] is True
+
+
+def test_intent_router_risk_flag_without_knowledge_match_refuses_safely() -> None:
     router = StaticIntentRouter(
         candidate_intents=["app_public_help"],
-        risk_flags=["investment_advice"],
+        risk_flags=["out_of_scope"],
     )
-    service = TurnService(intent_router_mode="controlled", intent_router=router)
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository(()),
+        intent_router_mode="controlled",
+        intent_router=router,
+    )
 
     response = make_client(service).post(
         "/v1/turns/evaluate",
@@ -1579,7 +1924,71 @@ def test_intent_router_risk_flag_can_only_make_the_decision_more_conservative() 
 
     result = response.json()["result"]
     assert result["decision"] == "refuse"
-    assert result["policy_rule_id"] == "LLM-RISK-001"
+    assert result["policy_rule_id"] == "KNO-001"
+
+
+def test_intent_router_risk_flag_with_unknown_intent_does_not_guess() -> None:
+    router = StaticIntentRouter(
+        candidate_intents=["unknown"],
+        risk_flags=["out_of_scope"],
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((published_document(),)),
+        intent_router_mode="controlled",
+        intent_router=router,
+    )
+
+    response = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "我想問其他事情", "channel": "web"},
+    )
+
+    result = response.json()["result"]
+    assert result["decision"] == "refuse"
+    assert result["policy_rule_id"] == "LLM-DEFAULT-DENY"
+
+
+def test_risk_noted_follow_up_cannot_force_the_previous_knowledge_fallback() -> None:
+    reference_document = published_document()
+    retriever = ConversationAwareRetriever(
+        original_match=None,
+        contextual_match=None,
+        reference_match=None,
+    )
+    router = StaticIntentRouter(
+        candidate_intents=["account_opening_general"],
+        risk_flags=["credential_or_sensitive_data"],
+    )
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((reference_document,)),
+        knowledge_retriever=retriever,
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    history = (
+        ConversationExchange(
+            user_utterance="未成年人要怎麼開證券戶？",
+            resolved_query="未成年人要怎麼開證券戶？",
+            assistant_answer=reference_document.item.standard_answer,
+            decision="answer",
+            knowledge_id=reference_document.item.knowledge_id,
+            knowledge_version=reference_document.item.version,
+        ),
+    )
+
+    response = service.evaluate(
+        TurnRequest(transcript="父母要帶什麼證件？", channel="voice"),
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query="未成年人開戶時父母需要攜帶哪些證件？",
+            history=history,
+            reference_knowledge_id=reference_document.item.knowledge_id,
+        ),
+    )
+
+    assert response.result.decision.value == "refuse"
+    assert response.result.policy_rule_id == "KNO-001"
 
 
 def test_intent_router_complaint_flag_hands_off_instead_of_answering() -> None:

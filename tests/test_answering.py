@@ -111,6 +111,8 @@ def test_natural_answer_composer_uses_question_and_bounded_history() -> None:
         assert body["response_format"]["json_schema"]["strict"] is True
         user_payload = json.loads(body["messages"][1]["content"])
         assert user_payload["current_utterance"] == "剛才交割那段再說清楚一點"
+        assert user_payload["resolved_query"] == "美股交割方式的詳細說明"
+        assert user_payload["focus"] == "美股交割方式"
         assert user_payload["follow_up_kind"] == "elaborate"
         assert user_payload["approved_segments"] == [
             {
@@ -154,13 +156,15 @@ def test_natural_answer_composer_uses_question_and_bounded_history() -> None:
     result = composer.compose(
         evidence(),
         current_utterance="剛才交割那段再說清楚一點",
+        resolved_query="美股交割方式的詳細說明",
+        focus="美股交割方式",
         follow_up_kind=FollowUpKind.ELABORATE,
         history=history,
     )
 
     assert result.answer == "可以，我換個方式說明交割部分。"
     assert result.selected_segment_ids == ("S1",)
-    assert result.prompt_version == "natural-conversation-answer-v4"
+    assert result.prompt_version == "natural-conversation-answer-v5"
 
 
 def test_natural_answer_composer_hides_remote_error_details() -> None:
@@ -178,6 +182,8 @@ def test_natural_answer_composer_hides_remote_error_details() -> None:
         composer.compose(
             evidence(),
             current_utterance="請說明",
+            resolved_query="請說明美股交割方式",
+            focus=None,
             follow_up_kind=FollowUpKind.NEW_QUESTION,
             history=(),
         )
@@ -250,6 +256,133 @@ def test_focus_approved_answer_extracts_only_application_times() -> None:
         "一、線上申請（交易日上午8點15分至下午2點）\n"
         "二、臨櫃申請時間為週一至週五上午08:30至下午16:30。"
     )
+
+
+def test_focus_approved_answer_uses_resolved_channel_for_ambiguous_time_follow_up() -> None:
+    standard_answer = (
+        "你可以線上或臨櫃申請。\n"
+        "一、線上申請（交易日上午8點15分至下午2點）\n"
+        "二、臨櫃申請時間為週一至週五上午08:30至下午16:30。"
+    )
+
+    focused = focus_approved_answer(
+        standard_answer=standard_answer,
+        current_utterance="剛剛沒聽清楚，申辦的時間是幾點到幾點?",
+        resolved_query="線上申請銷戶要怎麼操作；使用者追問：申辦時間",
+    )
+
+    assert focused == "一、線上申請（交易日上午8點15分至下午2點）"
+
+
+def test_focus_approved_answer_extracts_operational_steps_for_local_follow_up() -> None:
+    standard_answer = (
+        "符合資格即可申請現股當沖。\n"
+        "線上簽署方式：\n"
+        "在【國泰證券App】到【我的】點擊【線上簽署】。\n"
+        "或【樹精靈App】點【線上申辦】再點【線上簽署】。\n"
+        "其他情況請臨櫃辦理。"
+    )
+
+    focused = focus_approved_answer(
+        standard_answer=standard_answer,
+        current_utterance="如果我想線上簽署，要怎麼操作",
+        resolved_query="申請現股當沖時如何進行線上簽署契約書的操作",
+        focus="現股當沖申請的線上簽署操作方式",
+    )
+
+    assert focused == (
+        "在【國泰證券App】到【我的】點擊【線上簽署】。\n"
+        "或【樹精靈App】點【線上申辦】再點【線上簽署】。"
+    )
+
+
+def test_focus_approved_answer_keeps_counter_operation_separate_from_app_steps() -> None:
+    standard_answer = (
+        "線上申請：打開App後點選帳戶資訊及註銷。\n"
+        "臨櫃申請：請攜帶身分證到任一分公司辦理。"
+    )
+
+    focused = focus_approved_answer(
+        standard_answer=standard_answer,
+        current_utterance="臨櫃申請要怎麼辦理？",
+    )
+
+    assert focused == "臨櫃申請：請攜帶身分證到任一分公司辦理。"
+
+
+@pytest.mark.parametrize(
+    ("current_utterance", "resolved_query", "focus"),
+    [
+        (
+            "如果我要線上註銷帳戶，要怎麼操作？",
+            "註銷證券帳戶要怎麼線上操作？",
+            "線上註銷證券帳戶的操作方式",
+        ),
+        (
+            "那操作步驟是什麼？",
+            "註銷證券帳戶要怎麼線上操作？；使用者追問：那操作步驟是什麼？",
+            None,
+        ),
+    ],
+)
+def test_focus_approved_answer_keeps_online_heading_with_following_steps(
+    current_utterance: str,
+    resolved_query: str,
+    focus: str | None,
+) -> None:
+    standard_answer = (
+        "你可以線上或臨櫃申請註銷證券帳戶。\n"
+        "一、線上申請（交易日上午8點15分至下午2點）\n"
+        "打開【國泰證券App】，點下方【我的】，點選右上圓形圖示，"
+        "點選【帳戶資訊】，再點選註銷。\n"
+        "二、臨櫃申請：請攜帶身分證到任一分公司辦理。\n"
+        "提醒你\n"
+        "銷戶完成日後6個月內無法線上開戶。"
+    )
+
+    focused = focus_approved_answer(
+        standard_answer=standard_answer,
+        current_utterance=current_utterance,
+        resolved_query=resolved_query,
+        focus=focus,
+    )
+
+    assert focused == (
+        "一、線上申請（交易日上午8點15分至下午2點）\n"
+        "打開【國泰證券App】，點下方【我的】，點選右上圓形圖示，"
+        "點選【帳戶資訊】，再點選註銷。"
+    )
+
+
+def test_focus_approved_answer_inherits_channel_across_numbered_child_steps() -> None:
+    standard_answer = (
+        "一、線上申請\n"
+        "1. 打開國泰證券App。\n"
+        "2. 點選帳戶資訊後按下註銷。\n"
+        "3. 完成身分確認。\n"
+        "二、臨櫃申請\n"
+        "請攜帶身分證到任一分公司辦理。"
+    )
+
+    focused = focus_approved_answer(
+        standard_answer=standard_answer,
+        current_utterance="線上註銷有哪些操作步驟？",
+    )
+
+    assert focused == (
+        "1. 打開國泰證券App。\n"
+        "2. 點選帳戶資訊後按下註銷。\n"
+        "3. 完成身分確認。"
+    )
+
+
+def test_focus_approved_answer_does_not_substitute_another_channel() -> None:
+    focused = focus_approved_answer(
+        standard_answer="臨櫃申請：請攜帶身分證到任一分公司辦理。",
+        current_utterance="線上註銷要怎麼操作？",
+    )
+
+    assert focused is None
 
 
 def test_approved_answer_segments_only_select_existing_governed_text() -> None:
