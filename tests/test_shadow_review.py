@@ -46,12 +46,8 @@ def test_record_deduplicates_same_knowledge_model_and_prompt(
 ) -> None:
     reviews = repository(knowledge_store)
 
-    first = reviews.record(
-        shadow_input(), now=datetime(2026, 7, 22, 1, 0, tzinfo=UTC)
-    )
-    duplicate = reviews.record(
-        shadow_input(), now=datetime(2026, 7, 22, 2, 0, tzinfo=UTC)
-    )
+    first = reviews.record(shadow_input(), now=datetime(2026, 7, 22, 1, 0, tzinfo=UTC))
+    duplicate = reviews.record(shadow_input(), now=datetime(2026, 7, 22, 2, 0, tzinfo=UTC))
 
     assert duplicate.shadow_id == first.shadow_id
     assert len(reviews.list_results()) == 1
@@ -122,9 +118,7 @@ def test_generation_error_is_reported_but_not_reviewable(
 ) -> None:
     reviews = repository(knowledge_store)
 
-    result = reviews.record(
-        shadow_input(generated_answer=None, fallback_reason="generation_error")
-    )
+    result = reviews.record(shadow_input(generated_answer=None, fallback_reason="generation_error"))
 
     assert result.review_status is ShadowReviewStatus.NOT_REVIEWABLE
     assert result.generated_answer is None

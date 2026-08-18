@@ -19,8 +19,7 @@ def test_initial_catalog_is_traceable_and_not_runtime_eligible() -> None:
 
     source_ids = {source.source_id for source in repository.sources}
     assert all(
-        source.canonical_url is not None
-        and urlsplit(source.canonical_url).query == ""
+        source.canonical_url is not None and urlsplit(source.canonical_url).query == ""
         for source in repository.sources
     )
     assert all(
@@ -136,6 +135,4 @@ def test_asr_terms_reject_ambiguous_aliases(
     draft = LocalKnowledgeRepository.load(KNOWLEDGE_ROOT).items[0]
 
     with pytest.raises(ValidationError, match=expected_error):
-        KnowledgeItem.model_validate(
-            draft.model_dump(mode="json") | {"asr_terms": asr_terms}
-        )
+        KnowledgeItem.model_validate(draft.model_dump(mode="json") | {"asr_terms": asr_terms})

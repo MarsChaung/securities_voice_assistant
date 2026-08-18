@@ -156,9 +156,7 @@ def test_embedding_fallback_ignores_conversational_prefix_for_faq_match() -> Non
         source=base_document.source,
     )
 
-    match = HybridKnowledgeRetriever(
-        embedder=FailingEmbeddingProvider()
-    ).search(
+    match = HybridKnowledgeRetriever(embedder=FailingEmbeddingProvider()).search(
         query="如果我想線上開戶，資格是什麼",
         intent="account_opening_general",
         documents=(faq_document,),
@@ -271,11 +269,7 @@ def test_hybrid_retrieval_applies_model_specific_prefixes() -> None:
     )
 
     assert embedder.calls[-1] == ("query: 什麼是證券帳戶？",)
-    assert all(
-        text.startswith("passage: ")
-        for call in embedder.calls[:-1]
-        for text in call
-    )
+    assert all(text.startswith("passage: ") for call in embedder.calls[:-1] for text in call)
 
 
 def test_hybrid_retrieval_embeds_runtime_variants_as_separate_representations() -> None:

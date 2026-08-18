@@ -191,14 +191,10 @@ class SafeAuditLogger:
                 else None
             ),
             policy_guard_latency_ms=(
-                round(policy_guard_latency_ms, 3)
-                if policy_guard_latency_ms is not None
-                else None
+                round(policy_guard_latency_ms, 3) if policy_guard_latency_ms is not None else None
             ),
             retrieval_latency_ms=(
-                round(retrieval_latency_ms, 3)
-                if retrieval_latency_ms is not None
-                else None
+                round(retrieval_latency_ms, 3) if retrieval_latency_ms is not None else None
             ),
             answer_id=answer_id,
             answer_confidence=answer_confidence,
@@ -211,9 +207,7 @@ class SafeAuditLogger:
             prompt_version=prompt_version,
             prompt_hash=prompt_hash,
             generation_latency_ms=(
-                round(generation_latency_ms, 3)
-                if generation_latency_ms is not None
-                else None
+                round(generation_latency_ms, 3) if generation_latency_ms is not None else None
             ),
             generation_applied=generation_applied,
             generation_fallback_reason=generation_fallback_reason,
@@ -222,9 +216,7 @@ class SafeAuditLogger:
             intent_prompt_version=intent_prompt_version,
             intent_prompt_hash=intent_prompt_hash,
             intent_router_latency_ms=(
-                round(intent_router_latency_ms, 3)
-                if intent_router_latency_ms is not None
-                else None
+                round(intent_router_latency_ms, 3) if intent_router_latency_ms is not None else None
             ),
             intent_candidate_intents=tuple(intent_candidate_intents or []),
             intent_router_confidence=intent_router_confidence,
@@ -261,9 +253,7 @@ class SafeAuditLogger:
             prompt_version=prompt_version,
             prompt_hash=prompt_hash,
             generation_latency_ms=(
-                round(generation_latency_ms, 3)
-                if generation_latency_ms is not None
-                else None
+                round(generation_latency_ms, 3) if generation_latency_ms is not None else None
             ),
             output_guard_safe=output_guard_safe,
             fallback_reason=fallback_reason,
@@ -287,9 +277,7 @@ class SafeAuditLogger:
             sentence_count=sentence_count,
             audio_chunk_count=audio_chunk_count,
             first_audio_latency_ms=(
-                round(first_audio_latency_ms, 3)
-                if first_audio_latency_ms is not None
-                else None
+                round(first_audio_latency_ms, 3) if first_audio_latency_ms is not None else None
             ),
             total_latency_ms=round(total_latency_ms, 3),
             error_type=error_type,
@@ -323,9 +311,7 @@ class SafeAuditLogger:
             audio_duration_ms=round(audio_duration_ms, 3),
             initial_buffered_ms=round(initial_buffered_ms, 3),
             first_playback_delay_ms=(
-                round(first_playback_delay_ms, 3)
-                if first_playback_delay_ms is not None
-                else None
+                round(first_playback_delay_ms, 3) if first_playback_delay_ms is not None else None
             ),
             buffer_target_ms=round(buffer_target_ms, 3),
             crossfade_ms=round(crossfade_ms, 3),
@@ -336,9 +322,7 @@ class SafeAuditLogger:
             interruption_reason=interruption_reason,
             barge_in_mode=barge_in_mode,
             barge_in_duck_latency_ms=(
-                round(barge_in_duck_latency_ms, 3)
-                if barge_in_duck_latency_ms is not None
-                else None
+                round(barge_in_duck_latency_ms, 3) if barge_in_duck_latency_ms is not None else None
             ),
             barge_in_confirm_latency_ms=(
                 round(barge_in_confirm_latency_ms, 3)

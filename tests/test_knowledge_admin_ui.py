@@ -169,9 +169,7 @@ def test_readonly_standard_answer_style_preserves_line_breaks(
     )
     detail = client.get(submitted.headers["location"])
     stylesheet = client.get("/static/admin.css")
-    answer_rule = next(
-        rule for rule in stylesheet.text.split("}") if ".answer {" in rule
-    )
+    answer_rule = next(rule for rule in stylesheet.text.split("}") if ".answer {" in rule)
 
     assert submitted.status_code == 303
     assert detail.status_code == 200

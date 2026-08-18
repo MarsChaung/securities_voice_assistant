@@ -202,9 +202,7 @@ class DomainPolicyEngine:
 
         refuse_matches = [rule for rule in matches if rule.action is PolicyAction.REFUSE]
         non_credential_refusals = [
-            rule
-            for rule in refuse_matches
-            if rule.intent != "credential_or_identity_support"
+            rule for rule in refuse_matches if rule.intent != "credential_or_identity_support"
         ]
         if non_credential_refusals:
             return self._to_result(non_credential_refusals[0])

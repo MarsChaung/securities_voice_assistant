@@ -58,9 +58,7 @@ class VoiceTestDiagnosticLogger:
             "semantic_confidence": semantic_confidence,
             "reference_knowledge_id": reference_knowledge_id,
             "semantic_focus": semantic_focus,
-            "resolved_query": (
-                "[REDACTED]" if contains_sensitive_data else resolved_query
-            ),
+            "resolved_query": ("[REDACTED]" if contains_sensitive_data else resolved_query),
         }
         self._logger.info(
             "voice_test_conversation %s",

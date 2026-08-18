@@ -125,18 +125,14 @@ def test_ui_previews_then_imports_selected_rows_as_drafts(
     assert first_item.author == "Codex-assisted draft import"
     assert len(first_item.question_variants) == 2
     assert all(
-        variant.usage is QuestionVariantUsage.RETRIEVAL
-        for variant in first_item.question_variants
+        variant.usage is QuestionVariantUsage.RETRIEVAL for variant in first_item.question_variants
     )
     assert len(knowledge_store.list_items()) == 17
 
     result_page = client.get(commit_response.headers["location"])
     assert "已建立 2 筆 FAQ 知識草稿" in result_page.text
     assert f"/admin/knowledge/{valid_rows[0].proposed_knowledge_id}" in result_page.text
-    assert (
-        f"/admin/knowledge/{committed.rows[2].proposed_knowledge_id}"
-        not in result_page.text
-    )
+    assert f"/admin/knowledge/{committed.rows[2].proposed_knowledge_id}" not in result_page.text
 
 
 def test_same_file_and_source_reuses_existing_preview(
@@ -168,9 +164,7 @@ def test_same_file_and_source_reuses_existing_preview(
 
     imports.import_drafts(
         batch_id=first.batch_id,
-        selected_row_ids=tuple(
-            row.row_id for row in first.rows if row.is_actionable
-        ),
+        selected_row_ids=tuple(row.row_id for row in first.rows if row.is_actionable),
         actor=GovernanceActor(
             actor_id="Codex-assisted draft import",
             roles=frozenset({KnowledgeRole.AUTHOR}),
@@ -236,9 +230,7 @@ def test_different_file_skips_standard_answers_already_imported(
     )
     imports.import_drafts(
         batch_id=first.batch_id,
-        selected_row_ids=tuple(
-            row.row_id for row in first.rows if row.is_actionable
-        ),
+        selected_row_ids=tuple(row.row_id for row in first.rows if row.is_actionable),
         actor=GovernanceActor(
             actor_id="Codex-assisted draft import",
             roles=frozenset({KnowledgeRole.AUTHOR}),
@@ -261,9 +253,7 @@ def test_different_file_skips_standard_answers_already_imported(
     assert len(duplicates) == 2
     assert second.valid_row_count == 0
     assert all(not row.is_actionable for row in duplicates)
-    assert all(
-        "不會再建立知識草稿" in row.warnings[-1] for row in duplicates
-    )
+    assert all("不會再建立知識草稿" in row.warnings[-1] for row in duplicates)
 
     with pytest.raises(FaqImportError, match="不可匯入"):
         imports.import_drafts(
@@ -309,9 +299,7 @@ def test_preview_flags_question_already_used_by_existing_knowledge(
         now=datetime(2026, 7, 23, tzinfo=UTC),
     )
 
-    assert any(
-        "K-CATHAY-DCA-001" in warning for warning in preview.rows[0].warnings
-    )
+    assert any("K-CATHAY-DCA-001" in warning for warning in preview.rows[0].warnings)
 
 
 def _faq_workbook(*, marker: str = "") -> bytes:
@@ -343,9 +331,7 @@ def _faq_workbook(*, marker: str = "") -> bytes:
     for row_number, row in rows.items():
         for column, value in row.items():
             escaped = html.escape(value)
-            cells.append(
-                f'<c r="{column}{row_number}" t="inlineStr"><is><t>{escaped}</t></is></c>'
-            )
+            cells.append(f'<c r="{column}{row_number}" t="inlineStr"><is><t>{escaped}</t></is></c>')
     sheet_xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         f'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'

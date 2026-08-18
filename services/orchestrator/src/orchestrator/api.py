@@ -72,9 +72,7 @@ _VOICE_ACKNOWLEDGEMENT_AUDIO_URLS = {
     "context_confirmation": (
         f"/pilot/static/audio/acknowledgement-confirm.mp3?v={_PILOT_ASSET_VERSION}"
     ),
-    "context_wait": (
-        f"/pilot/static/audio/voice-acknowledgement.wav?v={_PILOT_ASSET_VERSION}"
-    ),
+    "context_wait": (f"/pilot/static/audio/voice-acknowledgement.wav?v={_PILOT_ASSET_VERSION}"),
     "follow_up_explanation": (
         f"/pilot/static/audio/acknowledgement-explain.mp3?v={_PILOT_ASSET_VERSION}"
     ),
@@ -211,9 +209,7 @@ def create_app(
     resolved_follow_up_resolver = follow_up_resolver or FollowUpResolver(
         semantic_mode=resolved_settings.conversation_semantic_mode,
         semantic_analyzer=_build_conversation_semantic_analyzer(resolved_settings),
-        semantic_minimum_confidence=(
-            resolved_settings.conversation_semantic_minimum_confidence
-        ),
+        semantic_minimum_confidence=(resolved_settings.conversation_semantic_minimum_confidence),
     )
     resolved_diagnostic_logger = diagnostic_logger or VoiceTestDiagnosticLogger(
         enabled=resolved_settings.voice_test_content_logging_enabled,
@@ -327,9 +323,7 @@ def create_app(
             knowledge_versions=turn.result.knowledge_versions,
             contains_sensitive_data=contains_sensitive_data,
             follow_up_kind=(conversation.kind.value if conversation is not None else None),
-            semantic_applied=(
-                conversation.semantic_applied if conversation is not None else False
-            ),
+            semantic_applied=(conversation.semantic_applied if conversation is not None else False),
             semantic_confidence=(
                 conversation.semantic_confidence if conversation is not None else None
             ),
@@ -585,9 +579,7 @@ def create_app(
                         try:
                             resolved = await asyncio.wait_for(
                                 asyncio.shield(turn_task),
-                                timeout=(
-                                    resolved_settings.voice_acknowledgement_delay_ms / 1_000
-                                ),
+                                timeout=(resolved_settings.voice_acknowledgement_delay_ms / 1_000),
                             )
                         except TimeoutError:
                             conversation_pending = not conversation_task.done()
@@ -598,11 +590,9 @@ def create_app(
                                 and conversation_task.exception() is None
                             ):
                                 acknowledgement_conversation = conversation_task.result()
-                            acknowledgement_variant = (
-                                select_voice_acknowledgement_variant(
-                                    acknowledgement_conversation,
-                                    conversation_pending=conversation_pending,
-                                )
+                            acknowledgement_variant = select_voice_acknowledgement_variant(
+                                acknowledgement_conversation,
+                                conversation_pending=conversation_pending,
                             )
                             acknowledgement_event: dict[str, object] = {
                                 "type": "acknowledgement",
@@ -613,9 +603,7 @@ def create_app(
                             }
                             if acknowledgement_variant == "context_confirmation":
                                 acknowledgement_event["audio_urls"] = [
-                                    _VOICE_ACKNOWLEDGEMENT_AUDIO_URLS[
-                                        "context_confirmation"
-                                    ],
+                                    _VOICE_ACKNOWLEDGEMENT_AUDIO_URLS["context_confirmation"],
                                     _VOICE_ACKNOWLEDGEMENT_AUDIO_URLS["context_wait"],
                                 ]
                             yield ndjson_event(acknowledgement_event)
@@ -626,9 +614,7 @@ def create_app(
                         resolved_diagnostic_logger.acknowledgement(
                             session_id=session_id,
                             variant=acknowledgement_variant,
-                            triggered_after_ms=(
-                                resolved_settings.voice_acknowledgement_delay_ms
-                            ),
+                            triggered_after_ms=(resolved_settings.voice_acknowledgement_delay_ms),
                             answer_ready_after_ms=(
                                 (perf_counter() - end_to_end_started_at) * 1_000
                             ),

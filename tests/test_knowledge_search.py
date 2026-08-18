@@ -77,9 +77,7 @@ def test_lexical_retrieval_uses_only_runtime_question_variants() -> None:
 def test_governed_faq_general_guidance_accepts_safe_runtime_intents() -> None:
     document = documents()[0]
     faq_document = KnowledgeDocument(
-        item=document.item.model_copy(
-            update={"allowed_intents": ["faq_general_guidance"]}
-        ),
+        item=document.item.model_copy(update={"allowed_intents": ["faq_general_guidance"]}),
         source=document.source,
     )
 

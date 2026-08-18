@@ -86,9 +86,7 @@ def test_shadow_runner_returns_before_generation_and_deduplicates_evidence() -> 
     assert "generated_answer" not in audit.events[0]
     assert len(reviews.items) == 1
     assert reviews.items[0].knowledge_id == "K-CATHAY-US-002"
-    assert reviews.items[0].generated_answer == (
-        "簡單說，美股可使用新臺幣或美元交割。"
-    )
+    assert reviews.items[0].generated_answer == ("簡單說，美股可使用新臺幣或美元交割。")
 
 
 def test_shadow_runner_records_generation_error_without_question_text() -> None:

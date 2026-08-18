@@ -109,8 +109,7 @@ class ParsedFaqRow:
             warnings=tuple(str(item) for item in _json_list(value["warnings"])),
             errors=tuple(str(item) for item in _json_list(value["errors"])),
             duplicate_knowledge_ids=tuple(
-                str(item)
-                for item in _json_list(value.get("duplicate_knowledge_ids", []))
+                str(item) for item in _json_list(value.get("duplicate_knowledge_ids", []))
             ),
             imported=bool(value.get("imported", False)),
         )
@@ -203,14 +202,10 @@ class FaqXlsxParser:
     @staticmethod
     def _sheet_paths(archive: zipfile.ZipFile) -> tuple[tuple[str, str], ...]:
         workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
-        relationships = ElementTree.fromstring(
-            archive.read("xl/_rels/workbook.xml.rels")
-        )
+        relationships = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
         targets = {
             relationship.attrib["Id"]: relationship.attrib["Target"]
-            for relationship in relationships.findall(
-                f"{{{_PACKAGE_REL_NS}}}Relationship"
-            )
+            for relationship in relationships.findall(f"{{{_PACKAGE_REL_NS}}}Relationship")
         }
         resolved: list[tuple[str, str]] = []
         for sheet in workbook.findall(f".//{{{_MAIN_NS}}}sheet"):
@@ -243,9 +238,7 @@ class FaqXlsxParser:
             column = _column_number(column_letters)
             cell_type = cell.attrib.get("t")
             if cell_type == "inlineStr":
-                value = "".join(
-                    node.text or "" for node in cell.iter(f"{{{_MAIN_NS}}}t")
-                )
+                value = "".join(node.text or "" for node in cell.iter(f"{{{_MAIN_NS}}}t"))
             else:
                 value_node = cell.find(f"{{{_MAIN_NS}}}v")
                 value = value_node.text if value_node is not None and value_node.text else ""
@@ -260,8 +253,7 @@ class FaqXlsxParser:
     ) -> tuple[int, int, int, tuple[int, ...]] | None:
         for row_number in sorted(matrix):
             values = {
-                column: _normalize_header(value)
-                for column, value in matrix[row_number].items()
+                column: _normalize_header(value) for column, value in matrix[row_number].items()
             }
             item_column = next(
                 (column for column, value in values.items() if value == "項次"),
@@ -276,11 +268,7 @@ class FaqXlsxParser:
                 for column, value in sorted(values.items())
                 if _QUESTION_HEADER.fullmatch(value)
             )
-            if (
-                item_column is not None
-                and answer_column is not None
-                and question_columns
-            ):
+            if item_column is not None and answer_column is not None and question_columns:
                 return row_number, item_column, answer_column, question_columns
         return None
 
@@ -317,9 +305,7 @@ class FaqXlsxParser:
             )
             if len(parsed) > MAX_IMPORT_ROWS:
                 raise FaqImportError("單一 Excel 最多可預覽 2,000 項知識")
-        return _flag_cross_row_answer_duplicates(
-            _flag_cross_row_duplicates(tuple(parsed))
-        )
+        return _flag_cross_row_answer_duplicates(_flag_cross_row_duplicates(tuple(parsed)))
 
 
 class FaqImportRepository:
@@ -352,9 +338,7 @@ class FaqImportRepository:
         publisher: str,
         uploaded_by: str,
         workbook: ParsedFaqWorkbook,
-        source_type: Literal[
-            "local_import", "approved_internal_faq"
-        ] = "local_import",
+        source_type: Literal["local_import", "approved_internal_faq"] = "local_import",
         source_url: str | None = None,
         now: datetime | None = None,
     ) -> FaqImportBatch:
@@ -393,9 +377,7 @@ class FaqImportRepository:
                     FaqImportBatchRecord.source_type == "local_import"
                 )
             else:
-                existing_query = existing_query.where(
-                    FaqImportBatchRecord.source_id == source_id
-                )
+                existing_query = existing_query.where(FaqImportBatchRecord.source_id == source_id)
             existing = session.scalar(existing_query)
             if existing is not None:
                 return _batch_to_domain(existing)
@@ -406,8 +388,7 @@ class FaqImportRepository:
                         KnowledgeQuestionVariantRecord.normalized_text,
                         KnowledgeQuestionVariantRecord.knowledge_id,
                     ).where(
-                        KnowledgeQuestionVariantRecord.usage
-                        == QuestionVariantUsage.RETRIEVAL.value
+                        KnowledgeQuestionVariantRecord.usage == QuestionVariantUsage.RETRIEVAL.value
                     )
                 )
             }
@@ -417,9 +398,7 @@ class FaqImportRepository:
                     KnowledgeItemRecord.knowledge_id,
                     KnowledgeItemRecord.standard_answer,
                 ).where(
-                    KnowledgeItemRecord.source_type.in_(
-                        ("approved_internal_faq", "local_import")
-                    )
+                    KnowledgeItemRecord.source_type.in_(("approved_internal_faq", "local_import"))
                 )
             ):
                 existing_answers.setdefault(
@@ -497,17 +476,13 @@ class FaqImportRepository:
             if unknown:
                 raise FaqImportError("選取內容包含不可匯入或不存在的 FAQ")
             chosen_rows = tuple(row for row in rows if row.row_id in selected)
-            chosen_answers = {
-                _normalized_answer(row.standard_answer) for row in chosen_rows
-            }
+            chosen_answers = {_normalized_answer(row.standard_answer) for row in chosen_rows}
             for knowledge_id, standard_answer in session.execute(
                 select(
                     KnowledgeItemRecord.knowledge_id,
                     KnowledgeItemRecord.standard_answer,
                 ).where(
-                    KnowledgeItemRecord.source_type.in_(
-                        ("approved_internal_faq", "local_import")
-                    )
+                    KnowledgeItemRecord.source_type.in_(("approved_internal_faq", "local_import"))
                 )
             ):
                 if _normalized_answer(standard_answer) in chosen_answers:
@@ -673,9 +648,7 @@ def _flag_cross_row_answer_duplicates(
         normalized = _normalized_answer(row.standard_answer)
         if normalized:
             owners.setdefault(normalized, []).append(row.row_id)
-    duplicates = {
-        normalized for normalized, row_ids in owners.items() if len(row_ids) > 1
-    }
+    duplicates = {normalized for normalized, row_ids in owners.items() if len(row_ids) > 1}
     if not duplicates:
         return rows
 
@@ -715,14 +688,11 @@ def _flag_existing_conflicts(
         conflicts = {
             existing_questions[normalized]
             for question in row.questions
-            if (normalized := _normalized_retrieval_question(question))
-            in existing_questions
+            if (normalized := _normalized_retrieval_question(question)) in existing_questions
         }
         warnings = row.warnings
         if conflicts:
-            warnings += (
-                "有問句已屬於既有知識項目：" + "、".join(sorted(conflicts)),
-            )
+            warnings += ("有問句已屬於既有知識項目：" + "、".join(sorted(conflicts)),)
         resolved.append(
             ParsedFaqRow(
                 row_id=row.row_id,
@@ -753,11 +723,7 @@ def _flag_existing_answer_duplicates(
         )
         warnings = row.warnings
         if duplicates:
-            warnings += (
-                "標準答案已存在於 "
-                + "、".join(duplicates)
-                + "；本列不會再建立知識草稿",
-            )
+            warnings += ("標準答案已存在於 " + "、".join(duplicates) + "；本列不會再建立知識草稿",)
         resolved.append(
             ParsedFaqRow(
                 row_id=row.row_id,
@@ -913,13 +879,9 @@ def _source_id(
 def _source_notes(batch: FaqImportBatchRecord) -> str:
     if batch.source_type == "local_import":
         return (
-            "本機匯入資料；原始檔不保存。"
-            f"批次：{batch.batch_id}；檔案 SHA-256：{batch.file_sha256}"
+            f"本機匯入資料；原始檔不保存。批次：{batch.batch_id}；檔案 SHA-256：{batch.file_sha256}"
         )
-    return (
-        "核准內部 FAQ 資料集；原始檔不保存。"
-        f"首次匯入批次：{batch.batch_id}"
-    )
+    return f"核准內部 FAQ 資料集；原始檔不保存。首次匯入批次：{batch.batch_id}"
 
 
 def _draft_title(source_item_no: str, questions: tuple[str, ...]) -> str:

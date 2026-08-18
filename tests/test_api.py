@@ -290,9 +290,7 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
         client.get("/pilot/static/audio/acknowledgement-explain.mp3"),
         client.get("/pilot/static/audio/acknowledgement-lookup.mp3"),
     ]
-    acknowledgement_wav = client.get(
-        "/pilot/static/audio/voice-acknowledgement.wav"
-    )
+    acknowledgement_wav = client.get("/pilot/static/audio/voice-acknowledgement.wav")
 
     assert redirect.status_code == 307
     assert redirect.headers["location"] == "/pilot"
@@ -308,8 +306,7 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
     assert all(response.status_code == 200 for response in acknowledgement_audio)
     assert acknowledgement_wav.status_code == 200
     assert all(
-        response.headers["content-type"] == "audio/mpeg"
-        for response in acknowledgement_audio
+        response.headers["content-type"] == "audio/mpeg" for response in acknowledgement_audio
     )
     assert all(response.content.startswith(b"ID3") for response in acknowledgement_audio)
     assert acknowledgement_wav.headers["content-type"] == "audio/x-wav"
@@ -767,9 +764,7 @@ def test_natural_new_question_does_not_send_prior_history_to_answer_model(
         )
 
     assert composer.calls[0]["history"] == ()
-    event_record = next(
-        record for record in caplog.records if "turn_decision" in record.message
-    )
+    event_record = next(record for record in caplog.records if "turn_decision" in record.message)
     event = json.loads(event_record.getMessage().removeprefix("turn_decision "))
     assert event["conversation_resolution_latency_ms"] == 12.5
     assert event["conversation_semantic_latency_ms"] == 8.0
@@ -812,17 +807,13 @@ def test_natural_focused_follow_up_falls_back_to_relevant_approved_excerpt() -> 
         item=base.item.model_copy(
             update={
                 "standard_answer": (
-                    "你可以線上或臨櫃申請。\n"
-                    f"{focused_answer}\n"
-                    "完成後6個月內無法線上申請。"
+                    f"你可以線上或臨櫃申請。\n{focused_answer}\n完成後6個月內無法線上申請。"
                 )
             }
         ),
         source=base.source,
     )
-    composer = StaticNaturalAnswerComposer(
-        answer="辦理時間是上午8點15分到下午3點。"
-    )
+    composer = StaticNaturalAnswerComposer(answer="辦理時間是上午8點15分到下午3點。")
     service = TurnService(
         knowledge_repository=StaticKnowledgeRepository((document,)),
         natural_answer_composer=composer,
@@ -846,9 +837,7 @@ def test_natural_focused_follow_up_falls_back_to_relevant_approved_excerpt() -> 
         ),
         conversation=ConversationResolution(
             kind=FollowUpKind.ELABORATE,
-            retrieval_query=(
-                "什麼是台股定期定額？；使用者追問：辦理時間是幾點到幾點？"
-            ),
+            retrieval_query=("什麼是台股定期定額？；使用者追問：辦理時間是幾點到幾點？"),
             history=history,
             reference_knowledge_id=document.item.knowledge_id,
         ),
@@ -903,9 +892,7 @@ def test_natural_online_operation_follow_up_keeps_multiline_section() -> None:
         ),
         conversation=ConversationResolution(
             kind=FollowUpKind.ELABORATE,
-            retrieval_query=(
-                "註銷證券帳戶要怎麼線上操作？；使用者追問：那操作步驟是什麼？"
-            ),
+            retrieval_query=("註銷證券帳戶要怎麼線上操作？；使用者追問：那操作步驟是什麼？"),
             history=history,
             reference_knowledge_id=document.item.knowledge_id,
         ),
@@ -920,24 +907,16 @@ def test_natural_online_operation_follow_up_keeps_multiline_section() -> None:
 def test_natural_semantic_focus_uses_selected_governed_segments_for_fallback() -> None:
     base = published_document()
     selected_answer = (
-        "銷戶完成日後6個月內，無法線上開戶。\n"
-        "若6個月內有開戶需求，需要到證券分公司臨櫃辦理。"
+        "銷戶完成日後6個月內，無法線上開戶。\n若6個月內有開戶需求，需要到證券分公司臨櫃辦理。"
     )
     document = KnowledgeDocument(
         item=base.item.model_copy(
-            update={
-                "standard_answer": (
-                    "你可以線上或臨櫃申請註銷證券帳戶。\n"
-                    f"{selected_answer}"
-                )
-            }
+            update={"standard_answer": (f"你可以線上或臨櫃申請註銷證券帳戶。\n{selected_answer}")}
         ),
         source=base.source,
     )
     composer = StaticNaturalAnswerComposer(
-        answer=(
-            "不可以。銷戶後3個月仍在6個月限制內，需要到證券分公司臨櫃辦理。"
-        ),
+        answer=("不可以。銷戶後3個月仍在6個月限制內，需要到證券分公司臨櫃辦理。"),
         selected_segment_ids=("S2", "S3"),
     )
     service = TurnService(
@@ -994,9 +973,7 @@ def test_conversation_retrieval_combines_original_context_and_recent_knowledge()
         reference_match=RetrievalMatch(document=reference_document, score=0.41),
     )
     service = TurnService(
-        knowledge_repository=StaticKnowledgeRepository(
-            (reference_document, generic_document)
-        ),
+        knowledge_repository=StaticKnowledgeRepository((reference_document, generic_document)),
         knowledge_retriever=retriever,
         natural_answer_composer=StaticNaturalAnswerComposer(),
         intent_router_mode="controlled",
@@ -1053,9 +1030,7 @@ def test_semantic_new_question_can_recover_a_competitive_recent_knowledge_match(
         reference_match=RetrievalMatch(document=closure_document, score=0.52),
     )
     service = TurnService(
-        knowledge_repository=StaticKnowledgeRepository(
-            (closure_document, online_opening_document)
-        ),
+        knowledge_repository=StaticKnowledgeRepository((closure_document, online_opening_document)),
         knowledge_retriever=retriever,
         natural_answer_composer=StaticNaturalAnswerComposer(),
         intent_router_mode="controlled",
@@ -1170,9 +1145,7 @@ def test_semantic_new_question_does_not_stick_to_a_weak_recent_topic() -> None:
         reference_match=RetrievalMatch(document=recent_document, score=0.4),
     )
     service = TurnService(
-        knowledge_repository=StaticKnowledgeRepository(
-            (recent_document, new_topic_document)
-        ),
+        knowledge_repository=StaticKnowledgeRepository((recent_document, new_topic_document)),
         knowledge_retriever=retriever,
         natural_answer_composer=StaticNaturalAnswerComposer(),
         intent_router_mode="controlled",
@@ -1787,9 +1760,7 @@ def test_unknown_prefetched_intent_is_rerouted_after_context_resolution() -> Non
         def route(self, question: str) -> IntentRouteResult:
             self.questions.append(question)
             candidate_intent = (
-                "unknown"
-                if len(self.questions) == 1
-                else "general_securities_knowledge"
+                "unknown" if len(self.questions) == 1 else "general_securities_knowledge"
             )
             return IntentRouteResult(
                 classification=IntentClassification.model_validate(
@@ -1898,9 +1869,7 @@ def test_intent_router_risk_flag_allows_a_grounded_knowledge_answer(
     assert result["decision"] == "answer"
     assert result["policy_rule_id"] == "LLM-ALLOW-RISK-NOTED-001"
     assert result["answer_id"] == document.item.knowledge_id
-    event_record = next(
-        record for record in caplog.records if "turn_decision" in record.message
-    )
+    event_record = next(record for record in caplog.records if "turn_decision" in record.message)
     event = json.loads(event_record.getMessage().removeprefix("turn_decision "))
     assert event["intent_risk_flags"] == [risk_flag]
     assert event["intent_router_applied"] is True

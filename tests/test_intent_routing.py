@@ -20,9 +20,7 @@ def test_openai_compatible_intent_router_uses_structured_prompt() -> None:
         assert body["response_format"]["json_schema"]["strict"] is True
         schema = body["response_format"]["json_schema"]["schema"]
         assert schema["additionalProperties"] is False
-        assert json.loads(body["messages"][1]["content"]) == {
-            "question": "如何開複委託帳戶？"
-        }
+        assert json.loads(body["messages"][1]["content"]) == {"question": "如何開複委託帳戶？"}
         return httpx.Response(
             200,
             json={

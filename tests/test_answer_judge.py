@@ -77,11 +77,7 @@ def test_groundedness_judge_hides_invalid_remote_content() -> None:
             transport=httpx.MockTransport(
                 lambda request: httpx.Response(
                     200,
-                    json={
-                        "choices": [
-                            {"message": {"content": secret_remote_content}}
-                        ]
-                    },
+                    json={"choices": [{"message": {"content": secret_remote_content}}]},
                 )
             )
         ),

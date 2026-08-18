@@ -341,20 +341,14 @@ class DatabaseKnowledgeRepository:
                         KnowledgeQuestionVariantRecord.knowledge_id != knowledge_id,
                         KnowledgeQuestionVariantRecord.usage
                         == QuestionVariantUsage.RETRIEVAL.value,
-                        KnowledgeQuestionVariantRecord.normalized_text.in_(
-                            retrieval_normalized
-                        ),
+                        KnowledgeQuestionVariantRecord.normalized_text.in_(retrieval_normalized),
                     )
                     .limit(1)
                 )
                 if conflict is not None:
-                    raise ValueError(
-                        f"問句變體與 {conflict.knowledge_id} 的正式檢索問句重複"
-                    )
+                    raise ValueError(f"問句變體與 {conflict.knowledge_id} 的正式檢索問句重複")
 
-            existing_by_id = {
-                variant.variant_id: variant for variant in record.question_variants
-            }
+            existing_by_id = {variant.variant_id: variant for variant in record.question_variants}
             next_records: list[KnowledgeQuestionVariantRecord] = []
             added = 0
             updated = 0
@@ -823,9 +817,7 @@ def _validate_asr_publish_conflicts(
         for term in candidate.asr_terms
     }
     candidate_aliases = {
-        _normalize_question(alias): alias
-        for term in candidate.asr_terms
-        for alias in term.aliases
+        _normalize_question(alias): alias for term in candidate.asr_terms for alias in term.aliases
     }
     published_records = session.scalars(
         select(KnowledgeItemRecord).where(
@@ -841,33 +833,25 @@ def _validate_asr_publish_conflicts(
             _normalize_question(term.canonical_term) for term in published.asr_terms
         }
         published_aliases = {
-            _normalize_question(alias)
-            for term in published.asr_terms
-            for alias in term.aliases
+            _normalize_question(alias) for term in published.asr_terms for alias in term.aliases
         }
-        conflicts = (
-            candidate_aliases.keys() & (published_aliases | published_canonical)
-        ) | (candidate_canonical.keys() & published_aliases)
+        conflicts = (candidate_aliases.keys() & (published_aliases | published_canonical)) | (
+            candidate_canonical.keys() & published_aliases
+        )
         if conflicts:
             conflict = sorted(conflicts)[0]
             display = candidate_aliases.get(conflict) or candidate_canonical[conflict]
-            raise ValueError(
-                f"ASR 詞彙／別名「{display}」與 {published.knowledge_id} 衝突"
-            )
+            raise ValueError(f"ASR 詞彙／別名「{display}」與 {published.knowledge_id} 衝突")
 
 
 def _runtime_windows_overlap(first: KnowledgeItem, second: KnowledgeItem) -> bool:
     if first.effective_at is None or second.effective_at is None:
         return False
     first_ends = [
-        deadline
-        for deadline in (first.expires_at, first.review_at)
-        if deadline is not None
+        deadline for deadline in (first.expires_at, first.review_at) if deadline is not None
     ]
     second_ends = [
-        deadline
-        for deadline in (second.expires_at, second.review_at)
-        if deadline is not None
+        deadline for deadline in (second.expires_at, second.review_at) if deadline is not None
     ]
     if not first_ends or not second_ends:
         return False

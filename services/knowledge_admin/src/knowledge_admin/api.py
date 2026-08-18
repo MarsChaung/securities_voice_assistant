@@ -312,10 +312,7 @@ def create_app(
             if len(variants) > 200:
                 raise ValueError("單一知識項目最多可保存 200 筆問句變體")
             guard = SensitiveDataGuard()
-            if any(
-                guard.scan(variant.question_text).has_sensitive_data
-                for variant in variants
-            ):
+            if any(guard.scan(variant.question_text).has_sensitive_data for variant in variants):
                 raise ValueError("問句變體不得包含個資、帳號、密碼或驗證碼")
             knowledge_repository.update_question_variants(
                 knowledge_id=knowledge_id,
@@ -350,11 +347,7 @@ def create_app(
             if len(terms) > 50:
                 raise ValueError("單一知識項目最多可保存 50 組語音辨識詞彙")
             guard = SensitiveDataGuard()
-            values = (
-                value
-                for term in terms
-                for value in (term.canonical_term, *term.aliases)
-            )
+            values = (value for term in terms for value in (term.canonical_term, *term.aliases))
             if any(guard.scan(value).has_sensitive_data for value in values):
                 raise ValueError("語音辨識詞彙與 ASR 別名不得包含個資或敏感資訊")
             knowledge_repository.update_asr_terms(
@@ -559,10 +552,7 @@ def create_app(
             if KnowledgeRole.REVIEWER not in actor.roles:
                 raise ValueError("Shadow 複核必須使用審核身分")
             normalized_note = note.strip() or None
-            if (
-                normalized_note
-                and SensitiveDataGuard().scan(normalized_note).has_sensitive_data
-            ):
+            if normalized_note and SensitiveDataGuard().scan(normalized_note).has_sensitive_data:
                 raise ValueError("複核說明不得包含個資、帳號、密碼或驗證碼")
             shadow_reviews.review(
                 shadow_id=shadow_id,
@@ -695,9 +685,7 @@ def _asr_term_inputs(form: FormData) -> tuple[ASRTermInput, ...]:
             term_id=term_id,
             canonical_term=canonical_term,
             aliases=tuple(
-                line
-                for line in (line.strip() for line in aliases_text.splitlines())
-                if line
+                line for line in (line.strip() for line in aliases_text.splitlines()) if line
             ),
         )
         for term_id, canonical_term, aliases_text in zip(
@@ -713,8 +701,7 @@ def _asr_term_inputs(form: FormData) -> tuple[ASRTermInput, ...]:
     new_aliases = tuple(
         line
         for line in (
-            line.strip()
-            for line in _form_string(form, "new_aliases_text", default="").splitlines()
+            line.strip() for line in _form_string(form, "new_aliases_text", default="").splitlines()
         )
         if line
     )

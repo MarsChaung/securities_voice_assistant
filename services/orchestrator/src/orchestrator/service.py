@@ -539,9 +539,7 @@ class TurnService:
                 action=PolicyAction.ALLOW,
                 intent=intent,
                 policy_rule_id=(
-                    "LLM-ALLOW-RISK-NOTED-001"
-                    if classification.risk_flags
-                    else "LLM-ALLOW-001"
+                    "LLM-ALLOW-RISK-NOTED-001" if classification.risk_flags else "LLM-ALLOW-001"
                 ),
                 confidence=classification.confidence,
             ),
@@ -600,8 +598,7 @@ class TurnService:
                         (
                             document
                             for document in documents
-                            if document.item.knowledge_id
-                            == conversation.reference_knowledge_id
+                            if document.item.knowledge_id == conversation.reference_knowledge_id
                         ),
                         None,
                     )
@@ -628,8 +625,7 @@ class TurnService:
                 )
                 if phonetic.ambiguous:
                     titles = "或".join(
-                        f"「{candidate.document.item.title}」"
-                        for candidate in phonetic.candidates
+                        f"「{candidate.document.item.title}」" for candidate in phonetic.candidates
                     )
                     return KnowledgeAnswerOutcome(
                         result=AnswerContract(
@@ -640,9 +636,7 @@ class TurnService:
                                 if phonetic.strategy == "alias"
                                 else "ASR-PHONETIC-002"
                             ),
-                            answer=(
-                                f"我辨識到的內容可能是在詢問{titles}，請再說一次完整問題。"
-                            ),
+                            answer=(f"我辨識到的內容可能是在詢問{titles}，請再說一次完整問題。"),
                             confidence=phonetic.candidates[0].score,
                         ),
                         generation=generation,
@@ -650,9 +644,7 @@ class TurnService:
                 if phonetic.match is not None:
                     match = phonetic.match
                     policy_rule_id = (
-                        "ASR-ALIAS-001"
-                        if phonetic.strategy == "alias"
-                        else "ASR-PHONETIC-001"
+                        "ASR-ALIAS-001" if phonetic.strategy == "alias" else "ASR-PHONETIC-001"
                     )
         finally:
             timing.retrieval_latency_ms = (perf_counter() - retrieval_started_at) * 1_000
@@ -783,12 +775,9 @@ class TurnService:
             intent=intent,
             documents=documents,
         )
-        if (
-            conversation is None
-            or (
-                conversation.retrieval_query == original_query
-                and conversation.kind is not FollowUpKind.NEW_QUESTION
-            )
+        if conversation is None or (
+            conversation.retrieval_query == original_query
+            and conversation.kind is not FollowUpKind.NEW_QUESTION
         ):
             return original_match
         if conversation.kind is FollowUpKind.NEW_QUESTION:
@@ -796,15 +785,13 @@ class TurnService:
                 (
                     exchange
                     for exchange in reversed(conversation.history)
-                    if exchange.decision == "answer"
-                    and exchange.knowledge_id is not None
+                    if exchange.decision == "answer" and exchange.knowledge_id is not None
                 ),
                 None,
             )
             if reference_exchange is None or (
                 original_match is not None
-                and original_match.document.item.knowledge_id
-                == reference_exchange.knowledge_id
+                and original_match.document.item.knowledge_id == reference_exchange.knowledge_id
             ):
                 return original_match
             reference_document = next(
@@ -827,8 +814,7 @@ class TurnService:
             selected_match = original_match
             if recent_match is not None and (
                 original_match is None
-                or recent_match.score + self._NEW_QUESTION_CONTEXT_BONUS
-                >= original_match.score
+                or recent_match.score + self._NEW_QUESTION_CONTEXT_BONUS >= original_match.score
             ):
                 selected_match = recent_match
             self._log_conversation_retrieval(
@@ -848,8 +834,7 @@ class TurnService:
         reference_match: RetrievalMatch | None = None
         if conversation.reference_knowledge_id is not None and (
             contextual_match is None
-            or contextual_match.document.item.knowledge_id
-            != conversation.reference_knowledge_id
+            or contextual_match.document.item.knowledge_id != conversation.reference_knowledge_id
         ):
             reference_document = next(
                 (
@@ -888,8 +873,7 @@ class TurnService:
         contextual_matches_reference = (
             contextual_match is not None
             and conversation.reference_knowledge_id is not None
-            and contextual_match.document.item.knowledge_id
-            == conversation.reference_knowledge_id
+            and contextual_match.document.item.knowledge_id == conversation.reference_knowledge_id
         )
         if conversation.semantic_applied and contextual_matches_reference:
             selected_match = contextual_match
@@ -1068,9 +1052,7 @@ class TurnService:
             output_character_count=len(result.answer),
             total_latency_ms=total_latency_ms,
             end_to_end_latency_ms=end_to_end_latency_ms,
-            conversation_resolution_latency_ms=(
-                timing.conversation_resolution_latency_ms
-            ),
+            conversation_resolution_latency_ms=(timing.conversation_resolution_latency_ms),
             conversation_semantic_latency_ms=timing.conversation_semantic_latency_ms,
             policy_guard_latency_ms=timing.policy_guard_latency_ms,
             retrieval_latency_ms=timing.retrieval_latency_ms,

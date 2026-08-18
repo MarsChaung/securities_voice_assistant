@@ -318,15 +318,11 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
             "context_confirmation": (
                 "/pilot/static/audio/acknowledgement-confirm.mp3?v=20260817.1"
             ),
-            "context_wait": (
-                "/pilot/static/audio/voice-acknowledgement.wav?v=20260817.1"
-            ),
+            "context_wait": ("/pilot/static/audio/voice-acknowledgement.wav?v=20260817.1"),
             "follow_up_explanation": (
                 "/pilot/static/audio/acknowledgement-explain.mp3?v=20260817.1"
             ),
-            "knowledge_lookup": (
-                "/pilot/static/audio/acknowledgement-lookup.mp3?v=20260817.1"
-            ),
+            "knowledge_lookup": ("/pilot/static/audio/acknowledgement-lookup.mp3?v=20260817.1"),
         },
     }
     assert config.json()["reply_modes"] == [{"id": "exact", "label": "核准原文"}]
@@ -584,9 +580,7 @@ def test_slow_natural_voice_answer_emits_acknowledgement_before_turn() -> None:
     assert events[0] == {
         "type": "acknowledgement",
         "variant": "context_confirmation",
-        "audio_url": (
-            "/pilot/static/audio/acknowledgement-confirm.mp3?v=20260817.1"
-        ),
+        "audio_url": ("/pilot/static/audio/acknowledgement-confirm.mp3?v=20260817.1"),
         "audio_urls": [
             "/pilot/static/audio/acknowledgement-confirm.mp3?v=20260817.1",
             "/pilot/static/audio/voice-acknowledgement.wav?v=20260817.1",
@@ -595,9 +589,7 @@ def test_slow_natural_voice_answer_emits_acknowledgement_before_turn() -> None:
     assert events[1]["type"] == "turn"
     assert events[2]["type"] == "audio"
     acknowledgement_event = next(
-        event
-        for event in diagnostic_logger.events
-        if event.get("event_type") == "acknowledgement"
+        event for event in diagnostic_logger.events if event.get("event_type") == "acknowledgement"
     )
     assert acknowledgement_event["variant"] == "context_confirmation"
     assert acknowledgement_event["triggered_after_ms"] == 100
@@ -644,9 +636,7 @@ def test_slow_answer_uses_completed_conversation_for_acknowledgement(
                 retrieval_query=utterance,
                 history=tuple(history),
                 reference_knowledge_id=(
-                    document.item.knowledge_id
-                    if kind is not FollowUpKind.NEW_QUESTION
-                    else None
+                    document.item.knowledge_id if kind is not FollowUpKind.NEW_QUESTION else None
                 ),
             )
 
@@ -690,9 +680,7 @@ def test_slow_answer_uses_completed_conversation_for_acknowledgement(
     acknowledgement = json.loads(response.text.splitlines()[0])
     assert acknowledgement["type"] == "acknowledgement"
     assert acknowledgement["variant"] == expected_variant
-    assert acknowledgement["audio_url"] == (
-        f"/pilot/static/audio/{expected_filename}?v=20260817.1"
-    )
+    assert acknowledgement["audio_url"] == (f"/pilot/static/audio/{expected_filename}?v=20260817.1")
     assert "audio_urls" not in acknowledgement
 
 

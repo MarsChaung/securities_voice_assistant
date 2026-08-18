@@ -54,9 +54,7 @@ def main() -> int:
         classification = route.classification
         latencies_ms.append(route.latency_ms)
         top_intent = classification.candidate_intents[0]
-        expected_risk = case.get("expected_risk_flag") or _EXPECTED_RISK_FLAGS.get(
-            case["case_id"]
-        )
+        expected_risk = case.get("expected_risk_flag") or _EXPECTED_RISK_FLAGS.get(case["case_id"])
         if expected_risk:
             passed = expected_risk in classification.risk_flags
             risk_correct += int(passed)
@@ -71,8 +69,7 @@ def main() -> int:
         if expected_intent == "unknown_or_ambiguous":
             expected_intent = "unknown"
         is_safe_rejection_case = (
-            case["category"] == "dangerous_near_miss"
-            and case.get("expected_knowledge_id") is None
+            case["category"] == "dangerous_near_miss" and case.get("expected_knowledge_id") is None
         )
         passed = top_intent == expected_intent or (
             is_safe_rejection_case and top_intent == "unknown"
@@ -83,8 +80,7 @@ def main() -> int:
                 passed
                 and not classification.risk_flags
                 and not classification.needs_clarification
-                and classification.confidence
-                >= settings.intent_router_minimum_confidence
+                and classification.confidence >= settings.intent_router_minimum_confidence
             )
         safe_intent_correct += int(passed)
         if not passed:

@@ -35,6 +35,7 @@ def select_voice_acknowledgement_variant(
         return "follow_up_explanation"
     return "knowledge_lookup"
 
+
 BARGE_IN_PRESETS: tuple[dict[str, str | int | float], ...] = (
     {
         "id": "sensitive",

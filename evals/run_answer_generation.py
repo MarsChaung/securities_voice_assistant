@@ -131,9 +131,7 @@ def main() -> int:
         )
         grounded_count += int(is_grounded)
         if not is_grounded:
-            failures.append(
-                f"{evidence.knowledge_id}: judge:{assessment.reason_code}"
-            )
+            failures.append(f"{evidence.knowledge_id}: judge:{assessment.reason_code}")
 
     total = len(repository.items)
     passed = not failures and grounded_count == total
@@ -149,9 +147,7 @@ def main() -> int:
                 "output_guard_passed": guard_passed,
                 "grounded": grounded_count,
                 "generation_average_latency_ms": (
-                    round(mean(generation_latencies), 1)
-                    if generation_latencies
-                    else None
+                    round(mean(generation_latencies), 1) if generation_latencies else None
                 ),
                 "generation_p95_latency_ms": _percentile_95(generation_latencies),
                 "judge_average_latency_ms": (

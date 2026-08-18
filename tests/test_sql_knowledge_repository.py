@@ -88,9 +88,7 @@ def test_sql_repository_only_returns_runtime_eligible_documents(
 
     assert [document.item.knowledge_id for document in eligible] == ["K-CATHAY-DCA-001"]
     assert eligible[0].source.source_id == "SRC-CATHAY-DCA-001"
-    assert eligible[0].item.question_variants[0].question_text == (
-        "每月固定投入台股的方式是什麼？"
-    )
+    assert eligible[0].item.question_variants[0].question_text == ("每月固定投入台股的方式是什麼？")
     assert eligible[0].item.asr_terms[0].canonical_term == "台股定期定額"
     assert eligible[0].item.asr_terms[0].aliases == ["台股定期定餓"]
     assert overdue == ()

@@ -124,9 +124,7 @@ class ThreadedShadowAnswerRunner:
             generation_latency_ms=generated.latency_ms,
             output_guard_safe=guard_result.safe,
             fallback_reason=(
-                "shadow_only"
-                if guard_result.safe
-                else f"output_guard:{guard_result.reason}"
+                "shadow_only" if guard_result.safe else f"output_guard:{guard_result.reason}"
             ),
         )
         return self._persist_review(
@@ -144,9 +142,7 @@ class ThreadedShadowAnswerRunner:
                 generation_latency_ms=generated.latency_ms,
                 output_guard_safe=guard_result.safe,
                 fallback_reason=(
-                    "shadow_only"
-                    if guard_result.safe
-                    else f"output_guard:{guard_result.reason}"
+                    "shadow_only" if guard_result.safe else f"output_guard:{guard_result.reason}"
                 ),
             )
         )
@@ -157,9 +153,7 @@ class ThreadedShadowAnswerRunner:
         try:
             self._review_writer.record(item)
         except Exception:
-            logging.getLogger("sva.shadow").exception(
-                "shadow review persistence failed"
-            )
+            logging.getLogger("sva.shadow").exception("shadow review persistence failed")
             return False
         return True
 

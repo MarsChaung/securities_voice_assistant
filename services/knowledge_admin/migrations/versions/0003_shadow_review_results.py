@@ -53,9 +53,7 @@ def upgrade() -> None:
         ["result_key"],
         unique=True,
     )
-    op.create_index(
-        "ix_shadow_review_results_turn_id", "shadow_review_results", ["turn_id"]
-    )
+    op.create_index("ix_shadow_review_results_turn_id", "shadow_review_results", ["turn_id"])
     op.create_index(
         "ix_shadow_review_results_knowledge_id",
         "shadow_review_results",

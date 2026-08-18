@@ -362,15 +362,9 @@ class FollowUpResolver:
             )
 
         is_rephrase = self._rephrase_pattern.search(utterance) is not None
-        has_specific_focus = (
-            self._elliptical_follow_up_pattern.search(utterance) is not None
-        )
+        has_specific_focus = self._elliptical_follow_up_pattern.search(utterance) is not None
         if is_rephrase:
-            kind = (
-                FollowUpKind.ELABORATE
-                if has_specific_focus
-                else FollowUpKind.REPHRASE
-            )
+            kind = FollowUpKind.ELABORATE if has_specific_focus else FollowUpKind.REPHRASE
         elif self._elaboration_pattern.search(utterance) or (
             len(utterance) <= 24 and has_specific_focus
         ):
@@ -469,8 +463,7 @@ class FollowUpResolver:
             (
                 exchange
                 for exchange in history
-                if exchange.decision == "answer"
-                and exchange.knowledge_id == reference.knowledge_id
+                if exchange.decision == "answer" and exchange.knowledge_id == reference.knowledge_id
             ),
             reference,
         )

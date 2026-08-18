@@ -55,8 +55,7 @@ class HybridKnowledgeRetriever:
                 )
                 for document in documents
                 for document_text in (
-                    f"{self._document_prefix}{text}"
-                    for text in _document_texts(document)
+                    f"{self._document_prefix}{text}" for text in _document_texts(document)
                 )
             )
             with self._cache_lock:
@@ -172,10 +171,7 @@ class HybridKnowledgeRetriever:
     ) -> tuple[EmbeddingVector, tuple[tuple[EmbeddingVector, ...], ...]]:
         self.warm(documents)
         document_texts = tuple(
-            tuple(
-                f"{self._document_prefix}{text}"
-                for text in _document_texts(document)
-            )
+            tuple(f"{self._document_prefix}{text}" for text in _document_texts(document))
             for document in documents
         )
         cache_keys = tuple(
@@ -184,8 +180,7 @@ class HybridKnowledgeRetriever:
         )
         with self._cache_lock:
             cached_vectors = tuple(
-                tuple(self._embedding_cache.get(key) for key in keys)
-                for keys in cache_keys
+                tuple(self._embedding_cache.get(key) for key in keys) for keys in cache_keys
             )
 
         embedded = self._embedder.embed((f"{self._query_prefix}{query}",))
@@ -196,8 +191,7 @@ class HybridKnowledgeRetriever:
         if any(vector is None for vectors in cached_vectors for vector in vectors):
             raise EmbeddingServiceError("embedding cache returned incomplete vectors")
         return query_vector, tuple(
-            tuple(vector for vector in vectors if vector is not None)
-            for vectors in cached_vectors
+            tuple(vector for vector in vectors if vector is not None) for vectors in cached_vectors
         )
 
 

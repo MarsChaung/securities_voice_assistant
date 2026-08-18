@@ -68,9 +68,7 @@ class NaturalAnswerComposer(Protocol):
     ) -> GeneratedAnswer: ...
 
 
-_OPERATION_FOCUS_PATTERN = re.compile(
-    r"操作|步驟|怎麼(?:申請|辦理|簽署)|如何(?:申請|辦理|簽署)"
-)
+_OPERATION_FOCUS_PATTERN = re.compile(r"操作|步驟|怎麼(?:申請|辦理|簽署)|如何(?:申請|辦理|簽署)")
 _OPERATION_ANSWER_PATTERN = re.compile(
     r"App|點(?:選|擊)|依序|進入|開啟|打開|線上申辦|攜帶|分公司|臨櫃"
 )
@@ -153,9 +151,7 @@ def select_approved_answer_segments(
     requested_ids = set(segment_ids)
     if not requested_ids.issubset(available_ids):
         return None
-    selected = [
-        segment.text for segment in segments if segment.segment_id in requested_ids
-    ]
+    selected = [segment.text for segment in segments if segment.segment_id in requested_ids]
     return "\n".join(selected) or None
 
 
@@ -174,13 +170,13 @@ def _scope_approved_answer_segments(
             current_channel = None
             current_heading_index = None
 
-        explicit_channels = [
-            channel for channel in _ANSWER_CHANNELS if channel in segment.text
-        ]
+        explicit_channels = [channel for channel in _ANSWER_CHANNELS if channel in segment.text]
         channel = (
             explicit_channels[0]
             if len(explicit_channels) == 1
-            else current_channel if not explicit_channels else None
+            else current_channel
+            if not explicit_channels
+            else None
         )
         scoped.append(
             _ScopedApprovedAnswerSegment(
@@ -202,9 +198,7 @@ def focus_approved_answer(
     resolved_query: str | None = None,
     focus: str | None = None,
 ) -> str | None:
-    focus_query = "；".join(
-        part for part in (current_utterance, resolved_query, focus) if part
-    )
+    focus_query = "；".join(part for part in (current_utterance, resolved_query, focus) if part)
     answer_pattern = next(
         (
             answer_pattern
@@ -219,17 +213,13 @@ def focus_approved_answer(
     segments = split_approved_answer_segments(standard_answer)
     scoped_segments = _scope_approved_answer_segments(segments)
     focused_segments = [
-        segment
-        for segment in scoped_segments
-        if answer_pattern.search(segment.segment.text)
+        segment for segment in scoped_segments if answer_pattern.search(segment.segment.text)
     ]
     wants_online = "線上" in focus_query
     wants_counter = "臨櫃" in focus_query
     if wants_online != wants_counter:
         channel = "線上" if wants_online else "臨櫃"
-        channel_segments = [
-            segment for segment in focused_segments if segment.channel == channel
-        ]
+        channel_segments = [segment for segment in focused_segments if segment.channel == channel]
         if channel_segments:
             focused_segments = channel_segments
         elif any(segment.channel is not None for segment in focused_segments):
@@ -259,11 +249,12 @@ def focus_approved_answer(
             segments[segment.section_heading_index].text
         )
     )
-    return "\n".join(
-        segment.text
-        for index, segment in enumerate(segments)
-        if index in selected_indices
-    ) or None
+    return (
+        "\n".join(
+            segment.text for index, segment in enumerate(segments) if index in selected_indices
+        )
+        or None
+    )
 
 
 class _GeneratedPayload(BaseModel):
@@ -360,9 +351,7 @@ class OpenAICompatibleAnswerComposer:
             completion = _ChatCompletion.model_validate(response.json())
             if not completion.choices:
                 raise ValueError("missing choice")
-            generated = _GeneratedPayload.model_validate_json(
-                completion.choices[0].message.content
-            )
+            generated = _GeneratedPayload.model_validate_json(completion.choices[0].message.content)
         except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as error:
             raise AnswerGenerationError("controlled answer generation failed") from error
 
@@ -586,17 +575,12 @@ class ControlledOutputGuard:
             elif period in {"上午", "早上"} and hour == 12:
                 hour = 0
             times.add(hour * 60 + minute)
-            characters[match.start() : match.end()] = " " * (
-                match.end() - match.start()
-            )
+            characters[match.start() : match.end()] = " " * (match.end() - match.start())
         return times, "".join(characters)
 
     @classmethod
     def _normalized_numbers(cls, text: str) -> set[str]:
-        return {
-            cls._normalize_number(number)
-            for number in cls._number_pattern.findall(text)
-        }
+        return {cls._normalize_number(number) for number in cls._number_pattern.findall(text)}
 
     @staticmethod
     def _normalize_number(number: str) -> str:

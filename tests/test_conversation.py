@@ -231,9 +231,7 @@ def test_conversation_semantic_analyzer_uses_structured_bounded_context() -> Non
             "T1",
             "T2",
         ]
-        assert payload["recent_conversation"][1]["resolved_query"] == (
-            "註銷證券帳戶辦理時間"
-        )
+        assert payload["recent_conversation"][1]["resolved_query"] == ("註銷證券帳戶辦理時間")
         assert len(payload["recent_conversation"][0]["user"]) <= 300
         assert len(payload["recent_conversation"][0]["resolved_query"]) <= 500
         assert len(payload["recent_conversation"][0]["assistant"]) <= 800
@@ -247,9 +245,7 @@ def test_conversation_semantic_analyzer_uses_structured_bounded_context() -> Non
                                 {
                                     "kind": "elaborate",
                                     "reference_turn_id": "T2",
-                                    "rewritten_query": (
-                                        "證券帳戶銷戶後3個月是否可以再次線上開戶"
-                                    ),
+                                    "rewritten_query": ("證券帳戶銷戶後3個月是否可以再次線上開戶"),
                                     "focus": "銷戶後重新開戶的限制期間",
                                     "confidence": 0.97,
                                 },

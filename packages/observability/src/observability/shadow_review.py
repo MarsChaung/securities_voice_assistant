@@ -194,9 +194,7 @@ class DatabaseShadowReviewRepository:
         except IntegrityError:
             with self._sessions() as session:
                 existing = session.scalar(
-                    select(ShadowReviewRecord).where(
-                        ShadowReviewRecord.result_key == result_key
-                    )
+                    select(ShadowReviewRecord).where(ShadowReviewRecord.result_key == result_key)
                 )
                 if existing is None:
                     raise
@@ -272,9 +270,7 @@ class DatabaseShadowReviewRepository:
         rejected = sum(item.review_status is ShadowReviewStatus.REJECTED for item in results)
         reviewed = accepted + rejected
         latencies = sorted(
-            item.generation_latency_ms
-            for item in results
-            if item.generation_latency_ms is not None
+            item.generation_latency_ms for item in results if item.generation_latency_ms is not None
         )
         return ShadowReviewMetrics(
             total=len(results),

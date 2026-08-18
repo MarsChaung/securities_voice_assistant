@@ -100,17 +100,25 @@ class GovernancePolicy:
         if action is GovernanceAction.SUBMIT_REVIEW and actor.actor_id != item.author:
             raise GovernanceError("只有原作者可以送交審核")
 
-        if action in {
-            GovernanceAction.UPDATE_CONTENT,
-            GovernanceAction.UPDATE_QUESTION_VARIANTS,
-            GovernanceAction.UPDATE_ASR_TERMS,
-        } and actor.actor_id != item.author:
+        if (
+            action
+            in {
+                GovernanceAction.UPDATE_CONTENT,
+                GovernanceAction.UPDATE_QUESTION_VARIANTS,
+                GovernanceAction.UPDATE_ASR_TERMS,
+            }
+            and actor.actor_id != item.author
+        ):
             raise GovernanceError("只有原作者可以編輯知識草稿")
 
-        if action in {
-            GovernanceAction.START_REVISION,
-            GovernanceAction.START_REVOKED_REVISION,
-        } and actor.actor_id != item.author:
+        if (
+            action
+            in {
+                GovernanceAction.START_REVISION,
+                GovernanceAction.START_REVOKED_REVISION,
+            }
+            and actor.actor_id != item.author
+        ):
             raise GovernanceError("只有原作者可以建立修訂新版")
 
         if action is GovernanceAction.COMPLETE_REVIEW:

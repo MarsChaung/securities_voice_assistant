@@ -553,9 +553,7 @@ def test_alembic_migration_creates_governance_tables(
     } <= table_names
     columns = {
         column["name"]
-        for column in inspect(knowledge_store_engine(database_path)).get_columns(
-            "knowledge_items"
-        )
+        for column in inspect(knowledge_store_engine(database_path)).get_columns("knowledge_items")
     }
     assert "asr_terms" in columns
 

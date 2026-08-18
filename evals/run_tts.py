@@ -53,10 +53,13 @@ def legacy_split_tts_text(text_value: str, *, max_chars: int = 42) -> list[str]:
             chunks.append(remaining)
             break
         window = remaining[:max_chars]
-        cut = max(
-            (window.rfind(mark) for mark in LEGACY_BOUNDARIES),
-            default=-1,
-        ) + 1
+        cut = (
+            max(
+                (window.rfind(mark) for mark in LEGACY_BOUNDARIES),
+                default=-1,
+            )
+            + 1
+        )
         if cut <= 0:
             cut = max_chars
         chunks.append(remaining[:cut].strip())
@@ -161,8 +164,7 @@ def benchmark_answer(
             "stream": True,
             "streaming_interval": 0.5,
             "turn_id": (
-                f"tts-benchmark-{benchmark_case.knowledge_id}-"
-                f"{segmenter_name}-{repetition}"
+                f"tts-benchmark-{benchmark_case.knowledge_id}-{segmenter_name}-{repetition}"
             ),
             "sentence_index": sentence_index,
             "ref_audio": ref_audio,
@@ -189,9 +191,7 @@ def benchmark_answer(
                         audio_duration_seconds += len(samples) / sample_rate
                         frame_peak = max(abs(sample) for sample in samples) / 32_768
                         peak_abs = max(peak_abs, frame_peak)
-                        clipped_samples += sum(
-                            1 for sample in samples if abs(sample) >= 32_767
-                        )
+                        clipped_samples += sum(1 for sample in samples if abs(sample) >= 32_767)
                         total_samples += len(samples)
                         if previous_last_sample is not None:
                             boundary_jump_max = max(
@@ -264,9 +264,7 @@ def summarize_results(
                 "total_latency_ms": round(total_latency_ms, 3),
                 "audio_duration_ms": round(total_audio_ms, 3),
                 "real_time_factor": round(total_latency_ms / total_audio_ms, 4),
-                "waveform_peak_abs_max": max(
-                    result.waveform_peak_abs for result in group
-                ),
+                "waveform_peak_abs_max": max(result.waveform_peak_abs for result in group),
                 "waveform_clipped_sample_ratio_max": max(
                     result.waveform_clipped_sample_ratio for result in group
                 ),
@@ -338,9 +336,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"status": "error", "error_type": "missing_tts_settings"}))
         return 2
 
-    segmenters = _segmenters(
-        arguments.segmenters or ["legacy", "selected_punctuation"]
-    )
+    segmenters = _segmenters(arguments.segmenters or ["legacy", "selected_punctuation"])
     cases = load_benchmark_cases(
         settings.database_url,
         sample_per_bucket=arguments.sample_per_bucket,

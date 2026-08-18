@@ -150,9 +150,7 @@ def test_controlled_intent_router_can_be_enabled_explicitly() -> None:
 def test_conversation_semantic_resolver_is_disabled_by_default() -> None:
     assert Settings.model_fields["conversation_semantic_mode"].default == "disabled"
     assert (
-        _build_conversation_semantic_analyzer(
-            Settings(conversation_semantic_mode="disabled")
-        )
+        _build_conversation_semantic_analyzer(Settings(conversation_semantic_mode="disabled"))
         is None
     )
 

@@ -44,11 +44,7 @@ def main() -> int:
     )
     model = (settings.conversation_llm_model or "").strip()
     if not model:
-        print(
-            json.dumps(
-                {"status": "error", "error": "SVA_CONVERSATION_LLM_MODEL is required"}
-            )
-        )
+        print(json.dumps({"status": "error", "error": "SVA_CONVERSATION_LLM_MODEL is required"}))
         return 2
 
     analyzer = OpenAICompatibleConversationSemanticAnalyzer(
@@ -94,9 +90,7 @@ def main() -> int:
                 ]
         expected_reference_knowledge_id = None
         if case["expected_reference_turn_id"] is not None:
-            expected_reference_index = (
-                int(case["expected_reference_turn_id"].removeprefix("T")) - 1
-            )
+            expected_reference_index = int(case["expected_reference_turn_id"].removeprefix("T")) - 1
             expected_reference_knowledge_id = case["history"][expected_reference_index][
                 "knowledge_id"
             ]
@@ -114,8 +108,7 @@ def main() -> int:
         if expected_kind is not FollowUpKind.NEW_QUESTION:
             passed = (
                 passed
-                and assessment.confidence
-                >= settings.conversation_semantic_minimum_confidence
+                and assessment.confidence >= settings.conversation_semantic_minimum_confidence
             )
         if not passed:
             failures.append(

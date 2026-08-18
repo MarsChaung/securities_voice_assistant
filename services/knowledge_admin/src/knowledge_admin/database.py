@@ -88,9 +88,7 @@ class KnowledgeQuestionVariantRecord(Base):
     position: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    knowledge_item: Mapped[KnowledgeItemRecord] = relationship(
-        back_populates="question_variants"
-    )
+    knowledge_item: Mapped[KnowledgeItemRecord] = relationship(back_populates="question_variants")
 
 
 class KnowledgeItemVersionRecord(Base):

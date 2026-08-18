@@ -226,9 +226,7 @@ def test_output_guard_accepts_concise_grounded_paraphrase() -> None:
 
 def test_focus_approved_answer_extracts_attendance_requirement() -> None:
     standard_answer = (
-        "未成年人可至櫃台辦理。\n"
-        "開戶時未成年人及父母雙方都要親臨櫃台辦理。\n"
-        "請攜帶身分證與健保卡。"
+        "未成年人可至櫃台辦理。\n開戶時未成年人及父母雙方都要親臨櫃台辦理。\n請攜帶身分證與健保卡。"
     )
 
     focused = focus_approved_answer(
@@ -298,8 +296,7 @@ def test_focus_approved_answer_extracts_operational_steps_for_local_follow_up() 
 
 def test_focus_approved_answer_keeps_counter_operation_separate_from_app_steps() -> None:
     standard_answer = (
-        "線上申請：打開App後點選帳戶資訊及註銷。\n"
-        "臨櫃申請：請攜帶身分證到任一分公司辦理。"
+        "線上申請：打開App後點選帳戶資訊及註銷。\n臨櫃申請：請攜帶身分證到任一分公司辦理。"
     )
 
     focused = focus_approved_answer(
@@ -369,11 +366,7 @@ def test_focus_approved_answer_inherits_channel_across_numbered_child_steps() ->
         current_utterance="線上註銷有哪些操作步驟？",
     )
 
-    assert focused == (
-        "1. 打開國泰證券App。\n"
-        "2. 點選帳戶資訊後按下註銷。\n"
-        "3. 完成身分確認。"
-    )
+    assert focused == ("1. 打開國泰證券App。\n2. 點選帳戶資訊後按下註銷。\n3. 完成身分確認。")
 
 
 def test_focus_approved_answer_does_not_substitute_another_channel() -> None:
@@ -398,25 +391,20 @@ def test_approved_answer_segments_only_select_existing_governed_text() -> None:
     assert select_approved_answer_segments(
         standard_answer=standard_answer,
         segment_ids=("S2", "S3"),
-    ) == (
-        "銷戶完成日後6個月內，無法線上開戶。\n"
-        "若6個月內有開戶需求，需要到證券分公司臨櫃辦理。"
+    ) == ("銷戶完成日後6個月內，無法線上開戶。\n若6個月內有開戶需求，需要到證券分公司臨櫃辦理。")
+    assert (
+        select_approved_answer_segments(
+            standard_answer=standard_answer,
+            segment_ids=("S9",),
+        )
+        is None
     )
-    assert select_approved_answer_segments(
-        standard_answer=standard_answer,
-        segment_ids=("S9",),
-    ) is None
 
 
 def test_output_guard_accepts_equivalent_approved_time_formats() -> None:
     result = ControlledOutputGuard().validate(
-        generated_answer=(
-            "線上是上午8:15到下午2點；臨櫃是上午8點30分到下午4點30分。"
-        ),
-        standard_answer=(
-            "線上申請時間為上午8點15分至下午2點；"
-            "臨櫃時間為上午08:30至下午16:30。"
-        ),
+        generated_answer=("線上是上午8:15到下午2點；臨櫃是上午8點30分到下午4點30分。"),
+        standard_answer=("線上申請時間為上午8點15分至下午2點；臨櫃時間為上午08:30至下午16:30。"),
     )
 
     assert result.safe is True
