@@ -107,6 +107,8 @@ def test_knowledge_list_contains_drafts(
     assert "本機開發模式" in response.text
     assert "語音客服測試" in response.text
     assert 'href="http://127.0.0.1:8080/voice-test"' in response.text
+    assert "系統診斷" in response.text
+    assert 'href="http://127.0.0.1:8080/system-diagnostics"' in response.text
     assert "台股定期定額的基本概念" in response.text
     assert "複審到期時間" in response.text
     assert "<strong>15</strong><span>筆</span>" in response.text

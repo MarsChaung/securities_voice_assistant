@@ -14,6 +14,8 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     log_level: str = "INFO"
+    system_diagnostics_enabled: bool = False
+    system_diagnostics_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     database_url: str = (
         "postgresql+psycopg://sva:sva-dev-only@127.0.0.1:5433/securities_voice_assistant"
     )

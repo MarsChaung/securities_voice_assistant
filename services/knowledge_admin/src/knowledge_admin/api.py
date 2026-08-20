@@ -84,6 +84,7 @@ def create_app(
         question_variant_usage_labels=_QUESTION_VARIANT_USAGE_LABELS,
         faq_import_status_labels=_FAQ_IMPORT_STATUS_LABELS,
         voice_test_url=str(resolved_settings.voice_test_url),
+        system_diagnostics_url=str(resolved_settings.system_diagnostics_url),
     )
     app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 

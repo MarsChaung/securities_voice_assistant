@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>系統診斷｜知識治理中心</title>
+    <link rel="stylesheet" href="{{ url_for('pilot-static', path='/system-diagnostics.css') }}?v={{ pilot_asset_version }}">
+    <script defer src="{{ url_for('pilot-static', path='/system-diagnostics.js') }}?v={{ pilot_asset_version }}"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="{{ knowledge_admin_url }}">
+        <span class="brand-mark" aria-hidden="true">知</span>
+        <span>
+          <strong>知識治理中心</strong>
+          <small>SYSTEM DIAGNOSTICS</small>
+        </span>
+      </a>
+      <nav aria-label="診斷工作台導覽">
+        <a href="{{ knowledge_admin_url }}">返回知識項目</a>
+        <a href="/voice-test">語音客服測試</a>
+      </nav>
+    </header>
+
+    <div class="safety-banner" role="status">
+      <strong>安全合成測試</strong>
+      <span>不使用客戶資料、不錄音、不變更知識庫，也不顯示 API key 或完整上游回應。</span>
+    </div>
+
+    <main>
+      <section class="page-heading" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">ENVIRONMENT INSPECTION</p>
+          <h1 id="page-title">系統診斷</h1>
+          <p>從 orchestrator 實際測試資料庫、服務設定、模型 API、TTS，並由本瀏覽器測試 ASR WebSocket。</p>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="copy-report" type="button" disabled>複製報告</button>
+          <button id="run-diagnostics" type="button">重新診斷</button>
+        </div>
+      </section>
+
+      <section class="summary-card" id="summary-card" data-status="running" aria-live="polite">
+        <div class="overall">
+          <span class="overall-dot" aria-hidden="true"></span>
+          <div>
+            <small>整體狀態</small>
+            <strong id="overall-label">正在執行診斷…</strong>
+          </div>
+        </div>
+        <dl class="summary-counts">
+          <div><dt>通過</dt><dd id="pass-count">—</dd></div>
+          <div><dt>警告</dt><dd id="warning-count">—</dd></div>
+          <div><dt>失敗</dt><dd id="fail-count">—</dd></div>
+          <div><dt>略過</dt><dd id="skipped-count">—</dd></div>
+        </dl>
+        <time id="generated-at">等待報告</time>
+      </section>
+
+      <section class="progress-card" id="progress-card" role="status">
+        <span class="spinner" aria-hidden="true"></span>
+        <div>
+          <strong>正在執行後端合成測試</strong>
+          <p>模型首次載入可能需要一段時間；完成後會繼續測試瀏覽器到 ASR 的 WebSocket。</p>
+        </div>
+      </section>
+
+      <section class="results" id="diagnostic-results" aria-label="診斷結果"></section>
+
+      <section class="report-note">
+        <h2>判讀原則</h2>
+        <p>「失敗」代表目前功能路徑無法完成；「警告」代表可運作但有部署風險或次要健康檢查異常；「略過」代表該功能未啟用，因此沒有呼叫對應 API。</p>
+      </section>
+
+      <noscript>這個診斷頁需要 JavaScript 才能執行瀏覽器 ASR WebSocket 測試。</noscript>
+    </main>
+  </body>
+</html>

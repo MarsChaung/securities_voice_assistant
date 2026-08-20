@@ -59,6 +59,13 @@ uv run uvicorn knowledge_admin.api:app --host 127.0.0.1 --reload --port 8081
 
 Shadow 複核工作台：<http://127.0.0.1:8081/admin/shadow>
 
+系統診斷：<http://127.0.0.1:8080/system-diagnostics>。診斷程序使用固定合成內容檢查
+Runtime、PostgreSQL、知識治理中心、LLM structured output、選用的 embedding API 與 TTS
+實際 WAV 合成，並由開啟頁面的瀏覽器直接建立 ASR WebSocket、等待模型回傳 `ready` 後關閉；
+不會錄音、寫入知識庫、顯示 API key 或保留完整上游回應。公司環境必須設定
+`SVA_SYSTEM_DIAGNOSTICS_ENABLED=true`，也應依模型冷啟動時間調整
+`SVA_SYSTEM_DIAGNOSTICS_TIMEOUT_SECONDS`。
+
 語音客服測試：<http://127.0.0.1:8080/voice-test>。可調整 ASR 模型、插話靈敏度與
 本機招呼語，並檢視 Runtime、ASR、TTS 與即時辨識狀態；AI 回答字幕會依語音實際起播
 時點分段顯示。自訂招呼語 TTS 端點只在 `development` 開放，內容不會保存。

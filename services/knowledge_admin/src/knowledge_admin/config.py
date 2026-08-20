@@ -15,6 +15,9 @@ class KnowledgeAdminSettings(BaseSettings):
     )
     knowledge_admin_dev_identity_enabled: bool = True
     voice_test_url: HttpUrl = HttpUrl("http://127.0.0.1:8080/voice-test")
+    system_diagnostics_url: HttpUrl = HttpUrl(
+        "http://127.0.0.1:8080/system-diagnostics"
+    )
 
     def validate_identity_mode(self) -> None:
         if self.app_env != "development" and self.knowledge_admin_dev_identity_enabled:

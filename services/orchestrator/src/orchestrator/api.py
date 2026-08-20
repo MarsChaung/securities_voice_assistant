@@ -48,6 +48,12 @@ from .diagnostics import VoiceTestDiagnosticLogger
 from .intent_routing import OpenAICompatibleIntentRouter
 from .service import TurnService
 from .shadow import ThreadedShadowAnswerRunner
+from .system_diagnostics import (
+    DiagnosticReport,
+    DiagnosticRunRequest,
+    SystemDiagnosticRunner,
+    SystemDiagnosticRunnerProtocol,
+)
 from .voice import (
     BARGE_IN_PRESETS,
     VOICE_FAREWELL_MESSAGE,
@@ -171,6 +177,7 @@ def create_app(
     conversation_store: ConversationContextStore | None = None,
     follow_up_resolver: FollowUpResolver | None = None,
     diagnostic_logger: VoiceTestDiagnosticLogger | None = None,
+    system_diagnostic_runner: SystemDiagnosticRunnerProtocol | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level)
@@ -231,6 +238,16 @@ def create_app(
             ),
             timeout_seconds=resolved_settings.voice_timeout_seconds,
         )
+    resolved_system_diagnostic_runner = system_diagnostic_runner
+    if (
+        resolved_system_diagnostic_runner is None
+        and resolved_settings.system_diagnostics_enabled
+    ):
+        resolved_system_diagnostic_runner = SystemDiagnosticRunner(
+            settings=resolved_settings,
+            service=resolved_service,
+            voice_service=resolved_voice_service,
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -251,6 +268,8 @@ def create_app(
         yield
         if shadow_runner is not None:
             shadow_runner.close()
+        if resolved_system_diagnostic_runner is not None:
+            await resolved_system_diagnostic_runner.close()
         if resolved_voice_service is not None:
             await resolved_voice_service.close()
 
@@ -360,6 +379,31 @@ def create_app(
                 "knowledge_admin_url": str(resolved_settings.knowledge_admin_url),
                 "pilot_asset_version": _PILOT_ASSET_VERSION,
             },
+        )
+
+    @app.get("/system-diagnostics", response_class=HTMLResponse, include_in_schema=False)
+    def system_diagnostics(request: Request) -> Response:
+        if resolved_system_diagnostic_runner is None:
+            raise HTTPException(404, "找不到資源。")
+        return templates.TemplateResponse(
+            request=request,
+            name="system_diagnostics.html",
+            context={
+                "knowledge_admin_url": str(resolved_settings.knowledge_admin_url),
+                "pilot_asset_version": _PILOT_ASSET_VERSION,
+            },
+        )
+
+    @app.post(
+        "/v1/system-diagnostics/run",
+        response_model=DiagnosticReport,
+    )
+    async def run_system_diagnostics(request: DiagnosticRunRequest) -> DiagnosticReport:
+        if resolved_system_diagnostic_runner is None:
+            raise HTTPException(404, "找不到資源。")
+        return await resolved_system_diagnostic_runner.run(
+            page_origin=request.page_origin,
+            secure_context=request.secure_context,
         )
 
     @app.get("/healthz")

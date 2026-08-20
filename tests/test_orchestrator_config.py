@@ -39,6 +39,11 @@ def test_exact_answer_mode_remains_the_default() -> None:
     assert _build_answer_composer(settings) is None
 
 
+def test_system_diagnostics_are_disabled_by_default() -> None:
+    assert Settings.model_fields["system_diagnostics_enabled"].default is False
+    assert Settings.model_fields["system_diagnostics_timeout_seconds"].default == 30.0
+
+
 def test_hybrid_retrieval_requires_an_embedding_model() -> None:
     with pytest.raises(ValidationError, match="SVA_EMBEDDINGS_MODEL"):
         Settings(

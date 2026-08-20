@@ -22,6 +22,8 @@ services:
     environment:
       SVA_APP_ENV: development
       SVA_LOG_LEVEL: INFO
+      SVA_SYSTEM_DIAGNOSTICS_ENABLED: ${SVA_SYSTEM_DIAGNOSTICS_ENABLED:-true}
+      SVA_SYSTEM_DIAGNOSTICS_TIMEOUT_SECONDS: ${SVA_SYSTEM_DIAGNOSTICS_TIMEOUT_SECONDS:-30}
       SVA_DATABASE_URL: postgresql+psycopg://sva:sva-dev-only@postgres:5432/securities_voice_assistant
       SVA_KNOWLEDGE_ADMIN_URL: http://127.0.0.1:8081/admin/knowledge
       SVA_LLM_BASE_URL: http://host.docker.internal:12345/v1
@@ -80,6 +82,7 @@ services:
       SVA_DATABASE_URL: postgresql+psycopg://sva:sva-dev-only@postgres:5432/securities_voice_assistant
       SVA_KNOWLEDGE_ADMIN_DEV_IDENTITY_ENABLED: "true"
       SVA_VOICE_TEST_URL: http://127.0.0.1:8080/voice-test
+      SVA_SYSTEM_DIAGNOSTICS_URL: ${SVA_SYSTEM_DIAGNOSTICS_URL:-http://127.0.0.1:8080/system-diagnostics}
     depends_on:
       postgres:
         condition: service_healthy
