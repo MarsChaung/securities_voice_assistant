@@ -247,10 +247,7 @@ def create_app(
             timeout_seconds=resolved_settings.voice_timeout_seconds,
         )
     resolved_system_diagnostic_runner = system_diagnostic_runner
-    if (
-        resolved_system_diagnostic_runner is None
-        and resolved_settings.system_diagnostics_enabled
-    ):
+    if resolved_system_diagnostic_runner is None and resolved_settings.system_diagnostics_enabled:
         resolved_system_diagnostic_runner = SystemDiagnosticRunner(
             settings=resolved_settings,
             service=resolved_service,

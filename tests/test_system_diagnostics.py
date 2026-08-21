@@ -87,13 +87,8 @@ def test_system_diagnostics_exercises_runtime_llm_tts_and_builds_browser_probe()
             assert request_payload["model"] == "gpt-oss:20b"
             assert request_payload["max_tokens"] == 768
             assert "response_format" not in request_payload
-            assert (
-                request_payload["tool_choice"]["function"]["name"]
-                == "system_diagnostic"
-            )
-            assert "必須呼叫 system_diagnostic 工具" in request_payload["messages"][0][
-                "content"
-            ]
+            assert request_payload["tool_choice"]["function"]["name"] == "system_diagnostic"
+            assert "必須呼叫 system_diagnostic 工具" in request_payload["messages"][0]["content"]
             assert request_payload["messages"][1]["content"] == "請執行連線診斷。"
             return httpx.Response(
                 200,
@@ -152,9 +147,7 @@ def test_system_diagnostics_exercises_runtime_llm_tts_and_builds_browser_probe()
     assert checks["tts"].status is DiagnosticStatus.PASS
     assert checks["asr_configuration"].status is DiagnosticStatus.PASS
     assert report.browser_asr_probe is not None
-    assert report.browser_asr_probe.url == (
-        "ws://127.0.0.1:8000/v1/audio/transcriptions/realtime"
-    )
+    assert report.browser_asr_probe.url == ("ws://127.0.0.1:8000/v1/audio/transcriptions/realtime")
     assert report.browser_asr_probe.init_message["semantic_endpointing"] is True
 
 
@@ -231,10 +224,7 @@ def test_system_diagnostics_reports_actionable_failures_without_secrets() -> Non
     assert report.overall_status is DiagnosticStatus.FAIL
     assert checks["configuration"].status is DiagnosticStatus.FAIL
     assert "loopback" in checks["configuration"].summary
-    assert any(
-        "SVA_KNOWLEDGE_ADMIN_URL" in item
-        for item in checks["configuration"].remediation
-    )
+    assert any("SVA_KNOWLEDGE_ADMIN_URL" in item for item in checks["configuration"].remediation)
     assert checks["runtime_database"].status is DiagnosticStatus.FAIL
     assert checks["tts"].status is DiagnosticStatus.FAIL
     assert checks["asr_configuration"].status is DiagnosticStatus.FAIL
@@ -280,9 +270,7 @@ def test_system_diagnostics_page_and_api_are_explicitly_enabled() -> None:
         retrieval_mode="lexical",
         voice_enabled=False,
         knowledge_admin_url=HttpUrl("https://knowledge-browser.test/admin/knowledge"),
-        knowledge_admin_internal_url=HttpUrl(
-            "http://knowledge-admin:8081/admin/knowledge"
-        ),
+        knowledge_admin_internal_url=HttpUrl("http://knowledge-admin:8081/admin/knowledge"),
     )
 
     with TestClient(

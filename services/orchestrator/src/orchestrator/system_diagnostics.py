@@ -153,15 +153,19 @@ class SystemDiagnosticRunner:
         if page.scheme == "https" and audio.scheme == "http":
             failures.append("HTTPS 頁面設定成連線未加密的 ASR HTTP／WebSocket")
             remediation.append("將 SVA_AUDIO_PUBLIC_BASE_URL 改成瀏覽器可達的 HTTPS URL。")
-        if page.hostname and not _is_loopback_host(page.hostname) and _is_loopback_host(
-            audio.hostname
+        if (
+            page.hostname
+            and not _is_loopback_host(page.hostname)
+            and _is_loopback_host(audio.hostname)
         ):
             failures.append("遠端瀏覽器的 ASR Public URL 指向 loopback 位址")
             remediation.append(
                 "SVA_AUDIO_PUBLIC_BASE_URL 不可使用 127.0.0.1 或 localhost；請填公司 DNS 名稱。"
             )
-        if page.hostname and not _is_loopback_host(page.hostname) and _is_loopback_host(
-            knowledge_admin.hostname
+        if (
+            page.hostname
+            and not _is_loopback_host(page.hostname)
+            and _is_loopback_host(knowledge_admin.hostname)
         ):
             failures.append("遠端瀏覽器的 knowledge-admin Public URL 指向 loopback 位址")
             remediation.append(
@@ -176,7 +180,9 @@ class SystemDiagnosticRunner:
         status = (
             DiagnosticStatus.FAIL
             if failures
-            else DiagnosticStatus.WARNING if warnings else DiagnosticStatus.PASS
+            else DiagnosticStatus.WARNING
+            if warnings
+            else DiagnosticStatus.PASS
         )
         issues = [*failures, *warnings]
         return _check(
@@ -255,10 +261,7 @@ class SystemDiagnosticRunner:
     async def _check_knowledge_admin(self) -> DiagnosticCheck:
         started_at = perf_counter()
         health_url = _health_url(
-            str(
-                self._settings.knowledge_admin_internal_url
-                or self._settings.knowledge_admin_url
-            )
+            str(self._settings.knowledge_admin_internal_url or self._settings.knowledge_admin_url)
         )
         try:
             response = await self._client.get(health_url)
@@ -311,9 +314,7 @@ class SystemDiagnosticRunner:
             )
 
         headers = _bearer_headers(
-            self._settings.llm_api_key.get_secret_value()
-            if self._settings.llm_api_key
-            else None
+            self._settings.llm_api_key.get_secret_value() if self._settings.llm_api_key else None
         )
         endpoint = f"{str(self._settings.llm_base_url).rstrip('/')}/chat/completions"
         schema = {
@@ -381,8 +382,7 @@ class SystemDiagnosticRunner:
         except httpx.HTTPStatusError as error:
             return _llm_failure(
                 summary=(
-                    "LLM API 拒絕 structured output 測試"
-                    f"（HTTP {error.response.status_code}）。"
+                    f"LLM API 拒絕 structured output 測試（HTTP {error.response.status_code}）。"
                 ),
                 endpoint=endpoint,
                 models=models,
@@ -515,9 +515,7 @@ class SystemDiagnosticRunner:
                     if event.get("type") == "audio":
                         audio_chunks += 1
                     elif event.get("type") == "error":
-                        synthesis_error_type = str(
-                            event.get("error_type") or "invalid_audio"
-                        )
+                        synthesis_error_type = str(event.get("error_type") or "invalid_audio")
         except TimeoutError:
             return _check(
                 check_id="tts",

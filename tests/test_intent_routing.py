@@ -63,9 +63,7 @@ def test_intent_router_classifies_account_closure_as_supported_intent() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read())
         assert "account_closure_general" in body["messages"][0]["content"]
-        assert json.loads(body["messages"][1]["content"]) == {
-            "question": "註銷證券帳戶要怎麼辦理?"
-        }
+        assert json.loads(body["messages"][1]["content"]) == {"question": "註銷證券帳戶要怎麼辦理?"}
         return httpx.Response(
             200,
             json={
@@ -117,9 +115,7 @@ def test_gpt_oss_follow_up_has_enough_output_budget_for_forced_tool_call() -> No
                                         "name": "intent_classification",
                                         "arguments": json.dumps(
                                             {
-                                                "candidate_intents": [
-                                                    "account_opening_general"
-                                                ],
+                                                "candidate_intents": ["account_opening_general"],
                                                 "confidence": 0.9,
                                                 "risk_flags": [],
                                                 "needs_clarification": False,
