@@ -187,6 +187,18 @@ class DomainPolicyEngine:
                 "網頁錯誤訊息",
             ),
         ),
+        PolicyRule(
+            "POL-ALLOW-010",
+            "account_closure_general",
+            PolicyAction.ALLOW,
+            (
+                "註銷證券帳戶",
+                "註銷帳券帳戶",
+                "如何銷戶",
+                "怎麼銷戶",
+                "停用帳戶",
+            ),
+        ),
     )
 
     def classify(self, text: str) -> PolicyResult:

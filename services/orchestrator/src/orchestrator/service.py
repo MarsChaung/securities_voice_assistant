@@ -318,7 +318,11 @@ class TurnService:
                 deterministic_result=policy_result,
                 prefetched=reusable_intent_route,
             )
-        error_type: str | None = None
+        error_type: str | None = (
+            "intent_router_unavailable"
+            if policy_result.policy_rule_id == "SYS-INTENT-ROUTER-ERROR"
+            else None
+        )
 
         if policy_result.action is PolicyAction.HANDOFF:
             result = AnswerContract(
@@ -329,11 +333,16 @@ class TurnService:
                 confidence=policy_result.confidence,
             )
         elif policy_result.action is PolicyAction.REFUSE:
+            answer = (
+                "意圖路由服務暫時無法完成判斷，請稍後再試。這不是內容安全拒答。"
+                if policy_result.policy_rule_id == "SYS-INTENT-ROUTER-ERROR"
+                else "很抱歉，這項需求不在本服務可回答的範圍內。"
+            )
             result = AnswerContract(
                 decision=Decision.REFUSE,
                 intent=policy_result.intent,
                 policy_rule_id=policy_result.policy_rule_id,
-                answer="很抱歉，這項需求不在本服務可回答的範圍內。",
+                answer=answer,
                 confidence=policy_result.confidence,
             )
         else:
@@ -470,12 +479,12 @@ class TurnService:
         prefetched: PrefetchedIntentRoute | None = None,
     ) -> tuple[PolicyResult, IntentRoutingTrace]:
         if prefetched is not None and prefetched.result is None:
-            return deterministic_result, IntentRoutingTrace(
+            return self._intent_routing_failure_result(deterministic_result), IntentRoutingTrace(
                 mode=self._intent_router_mode.value,
                 fallback_reason=prefetched.fallback_reason,
             )
         if self._intent_router is None:
-            return deterministic_result, IntentRoutingTrace(
+            return self._intent_routing_failure_result(deterministic_result), IntentRoutingTrace(
                 mode=self._intent_router_mode.value,
                 fallback_reason="router_unavailable",
             )
@@ -486,9 +495,12 @@ class TurnService:
             try:
                 route = self._intent_router.route(question)
             except IntentRoutingError:
-                return deterministic_result, IntentRoutingTrace(
-                    mode=self._intent_router_mode.value,
-                    fallback_reason="routing_error",
+                return (
+                    self._intent_routing_failure_result(deterministic_result),
+                    IntentRoutingTrace(
+                        mode=self._intent_router_mode.value,
+                        fallback_reason="routing_error",
+                    ),
                 )
 
         classification = route.classification
@@ -544,6 +556,17 @@ class TurnService:
                 confidence=classification.confidence,
             ),
             replace(trace, applied=True),
+        )
+
+    @staticmethod
+    def _intent_routing_failure_result(deterministic_result: PolicyResult) -> PolicyResult:
+        if deterministic_result.policy_rule_id != "POL-DEFAULT-DENY":
+            return deterministic_result
+        return PolicyResult(
+            action=PolicyAction.REFUSE,
+            intent="intent_router_unavailable",
+            policy_rule_id="SYS-INTENT-ROUTER-ERROR",
+            confidence=0.0,
         )
 
     def _answer_from_knowledge(

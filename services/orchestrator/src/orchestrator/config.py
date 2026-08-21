@@ -31,11 +31,14 @@ class Settings(BaseSettings):
     hybrid_retrieval_minimum_score: float = Field(default=0.4, ge=0, le=1)
     hybrid_retrieval_ambiguity_margin: float = Field(default=0.02, ge=0, le=1)
     knowledge_admin_url: HttpUrl = HttpUrl("http://127.0.0.1:8081/admin/knowledge")
+    knowledge_admin_internal_url: HttpUrl | None = None
     llm_base_url: HttpUrl = HttpUrl("http://127.0.0.1:12345/v1")
     llm_api_key: SecretStr | None = None
+    llm_structured_output_mode: Literal["auto", "json_schema", "tool_call"] = "auto"
     answer_mode: Literal["exact", "shadow_llm", "controlled_llm", "fixed_message"] = "exact"
     answer_llm_model: str | None = None
     answer_llm_timeout_seconds: float = Field(default=8.0, gt=0)
+    answer_llm_max_tokens: int = Field(default=768, ge=128, le=4096)
     natural_answer_enabled: bool = False
     voice_test_content_logging_enabled: bool = False
     shadow_max_pending: int = Field(default=8, ge=1, le=100)
@@ -44,10 +47,12 @@ class Settings(BaseSettings):
     intent_router_mode: Literal["disabled", "shadow", "controlled"] = "disabled"
     intent_llm_model: str | None = None
     intent_llm_timeout_seconds: float = Field(default=8.0, gt=0)
+    intent_llm_max_tokens: int = Field(default=768, ge=128, le=4096)
     intent_router_minimum_confidence: float = Field(default=0.8, ge=0, le=1)
     conversation_semantic_mode: Literal["disabled", "shadow", "controlled"] = "disabled"
     conversation_llm_model: str | None = None
     conversation_llm_timeout_seconds: float = Field(default=8.0, gt=0)
+    conversation_llm_max_tokens: int = Field(default=768, ge=128, le=4096)
     conversation_semantic_minimum_confidence: float = Field(default=0.85, ge=0, le=1)
     voice_enabled: bool = False
     tts_base_url: HttpUrl = HttpUrl("http://127.0.0.1:8000/v1")

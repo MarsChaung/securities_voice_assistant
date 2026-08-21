@@ -73,6 +73,49 @@ def test_openai_compatible_answer_composer_uses_structured_grounded_prompt() -> 
     assert result.latency_ms >= 0
 
 
+def test_gpt_oss_answer_composer_uses_forced_tool_call() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        assert "response_format" not in body
+        assert body["tools"][0]["function"]["name"] == "controlled_answer"
+        assert body["tools"][0]["function"]["strict"] is True
+        assert body["tool_choice"]["function"]["name"] == "controlled_answer"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": "controlled_answer",
+                                        "arguments": json.dumps(
+                                            {"answer": "美股可用新臺幣或美元交割。"},
+                                            ensure_ascii=False,
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    composer = OpenAICompatibleAnswerComposer(
+        base_url="http://llm.test/v1",
+        model="mlx-community/gpt-oss-20b-MXFP4-Q8",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = composer.compose(evidence())
+
+    assert result.answer == "美股可用新臺幣或美元交割。"
+
+
 def test_answer_composer_hides_remote_error_details() -> None:
     composer = OpenAICompatibleAnswerComposer(
         base_url="http://llm.test/v1",
@@ -105,7 +148,7 @@ def test_natural_answer_composer_uses_question_and_bounded_history() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read())
         assert body["temperature"] == 0.1
-        assert body["max_tokens"] == 320
+        assert body["max_tokens"] == 768
         assert "問句中的數字" in body["messages"][0]["content"]
         assert "160 個中文字" in body["messages"][0]["content"]
         assert body["response_format"]["json_schema"]["strict"] is True

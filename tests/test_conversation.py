@@ -248,6 +248,7 @@ def test_conversation_semantic_analyzer_uses_structured_bounded_context() -> Non
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.read())
         assert body["temperature"] == 0
+        assert body["max_tokens"] == 768
         assert body["response_format"]["json_schema"]["strict"] is True
         payload = json.loads(body["messages"][1]["content"])
         assert payload["current_utterance"] == "若銷戶後3個月，可以再線上開戶嗎?"

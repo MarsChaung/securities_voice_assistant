@@ -250,6 +250,10 @@ class VoicePlaybackMetrics(BaseModel):
 class VoiceSynthesisError(RuntimeError):
     """TTS failure whose message must not contain answer or upstream response text."""
 
+    def __init__(self, message: str, *, error_type: str = "invalid_audio") -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
 
 @dataclass(frozen=True)
 class VoiceModels:
@@ -328,7 +332,7 @@ class VoiceService:
                     )
                 if sentence_chunk_index == 0:
                     raise VoiceSynthesisError("empty TTS stream")
-        except VoiceSynthesisError:
+        except VoiceSynthesisError as error:
             total_latency_ms = (perf_counter() - started_at) * 1_000
             self._audit_logger.voice_synthesis(
                 turn_id=turn_id,
@@ -342,6 +346,7 @@ class VoiceService:
             yield ndjson_event(
                 {
                     "type": "error",
+                    "error_type": error.error_type,
                     "detail": "語音合成暫時無法使用，畫面仍保留文字答案。",
                 }
             )
@@ -403,7 +408,10 @@ class VoiceService:
             async with self._client.stream("POST", "audio/speech", json=payload) as response:
                 if not response.is_success:
                     await response.aread()
-                    raise VoiceSynthesisError("TTS upstream rejected request")
+                    raise VoiceSynthesisError(
+                        "TTS upstream rejected request",
+                        error_type="upstream_rejected",
+                    )
                 async for chunk in response.aiter_bytes():
                     buffer += chunk
                     frames, buffer = extract_wav_frames(buffer)
@@ -411,7 +419,10 @@ class VoiceService:
                         self._validate_wav(frame)
                         yield frame
         except httpx.HTTPError as error:
-            raise VoiceSynthesisError("TTS upstream unavailable") from error
+            raise VoiceSynthesisError(
+                "TTS upstream unavailable",
+                error_type="upstream_unavailable",
+            ) from error
         if buffer:
             raise VoiceSynthesisError("incomplete WAV stream")
 

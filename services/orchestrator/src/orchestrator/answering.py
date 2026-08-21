@@ -13,6 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from policy import SensitiveDataGuard
 
 from .conversation import ConversationExchange, FollowUpKind
+from .structured_output import (
+    StructuredOutputMode,
+    structured_output_content,
+    structured_output_options,
+)
 
 
 class AnswerMode(StrEnum):
@@ -270,18 +275,6 @@ class _NaturalGeneratedPayload(BaseModel):
     selected_segment_ids: list[str] = Field(default_factory=list, max_length=40)
 
 
-class _ChatMessage(BaseModel):
-    content: str
-
-
-class _ChatChoice(BaseModel):
-    message: _ChatMessage
-
-
-class _ChatCompletion(BaseModel):
-    choices: list[_ChatChoice]
-
-
 class OpenAICompatibleAnswerComposer:
     PROMPT_VERSION = "controlled-answer-v4"
     SYSTEM_PROMPT = (
@@ -302,11 +295,15 @@ class OpenAICompatibleAnswerComposer:
         model: str,
         api_key: str | None = None,
         timeout_seconds: float = 8.0,
+        max_tokens: int = 768,
+        structured_output_mode: StructuredOutputMode = "auto",
         client: httpx.Client | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
+        self._max_tokens = max_tokens
+        self._structured_output_mode = structured_output_mode
         self._client = client or httpx.Client(timeout=timeout_seconds)
         self._prompt_hash = hashlib.sha256(self.SYSTEM_PROMPT.encode()).hexdigest()
 
@@ -330,14 +327,13 @@ class OpenAICompatibleAnswerComposer:
                 json={
                     "model": self._model,
                     "temperature": 0,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "controlled_answer",
-                            "strict": True,
-                            "schema": _GeneratedPayload.model_json_schema(),
-                        },
-                    },
+                    "max_tokens": self._max_tokens,
+                    **structured_output_options(
+                        name="controlled_answer",
+                        schema=_GeneratedPayload.model_json_schema(),
+                        mode=self._structured_output_mode,
+                        model=self._model,
+                    ),
                     "messages": [
                         {"role": "system", "content": self.SYSTEM_PROMPT},
                         {
@@ -348,10 +344,14 @@ class OpenAICompatibleAnswerComposer:
                 },
             )
             response.raise_for_status()
-            completion = _ChatCompletion.model_validate(response.json())
-            if not completion.choices:
-                raise ValueError("missing choice")
-            generated = _GeneratedPayload.model_validate_json(completion.choices[0].message.content)
+            generated = _GeneratedPayload.model_validate_json(
+                structured_output_content(
+                    response.json(),
+                    name="controlled_answer",
+                    mode=self._structured_output_mode,
+                    model=self._model,
+                )
+            )
         except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as error:
             raise AnswerGenerationError("controlled answer generation failed") from error
 
@@ -398,11 +398,15 @@ class OpenAICompatibleNaturalAnswerComposer:
         model: str,
         api_key: str | None = None,
         timeout_seconds: float = 8.0,
+        max_tokens: int = 768,
+        structured_output_mode: StructuredOutputMode = "auto",
         client: httpx.Client | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
+        self._max_tokens = max_tokens
+        self._structured_output_mode = structured_output_mode
         self._client = client or httpx.Client(timeout=timeout_seconds)
         self._prompt_hash = hashlib.sha256(self.SYSTEM_PROMPT.encode()).hexdigest()
 
@@ -451,15 +455,13 @@ class OpenAICompatibleNaturalAnswerComposer:
                 json={
                     "model": self._model,
                     "temperature": 0.1,
-                    "max_tokens": 320,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "natural_conversation_answer",
-                            "strict": True,
-                            "schema": _NaturalGeneratedPayload.model_json_schema(),
-                        },
-                    },
+                    "max_tokens": self._max_tokens,
+                    **structured_output_options(
+                        name="natural_conversation_answer",
+                        schema=_NaturalGeneratedPayload.model_json_schema(),
+                        mode=self._structured_output_mode,
+                        model=self._model,
+                    ),
                     "messages": [
                         {"role": "system", "content": self.SYSTEM_PROMPT},
                         {
@@ -470,11 +472,13 @@ class OpenAICompatibleNaturalAnswerComposer:
                 },
             )
             response.raise_for_status()
-            completion = _ChatCompletion.model_validate(response.json())
-            if not completion.choices:
-                raise ValueError("missing choice")
             generated = _NaturalGeneratedPayload.model_validate_json(
-                completion.choices[0].message.content
+                structured_output_content(
+                    response.json(),
+                    name="natural_conversation_answer",
+                    mode=self._structured_output_mode,
+                    model=self._model,
+                )
             )
         except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as error:
             raise AnswerGenerationError("natural answer generation failed") from error

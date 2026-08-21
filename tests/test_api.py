@@ -343,6 +343,8 @@ def test_internal_pilot_page_and_static_assets_are_served() -> None:
     assert "VoiceBargeIn.isNonActionableUtterance(transcript)" in script.text
     assert 'event.type === "acknowledgement"' in script.text
     assert 'cache: "force-cache"' in script.text
+    assert 'return "意圖路由失敗"' in script.text
+    assert 'return "未涵蓋的問題"' in script.text
     assert "localStorage" not in script.text
 
 
@@ -1756,7 +1758,10 @@ def test_intent_router_failure_falls_back_to_deterministic_policy() -> None:
         json={"transcript": "如何開複委託帳戶?", "channel": "web"},
     )
 
-    assert response.json()["result"]["policy_rule_id"] == "POL-DEFAULT-DENY"
+    result = response.json()["result"]
+    assert result["policy_rule_id"] == "SYS-INTENT-ROUTER-ERROR"
+    assert result["intent"] == "intent_router_unavailable"
+    assert result["confidence"] == 0
 
 
 def test_intent_router_prefetch_failure_is_reused_as_safe_fallback() -> None:
@@ -1769,7 +1774,7 @@ def test_intent_router_prefetch_failure_is_reused_as_safe_fallback() -> None:
 
     assert prefetched is not None
     assert prefetched.fallback_reason == "routing_error"
-    assert response.result.policy_rule_id == "POL-DEFAULT-DENY"
+    assert response.result.policy_rule_id == "SYS-INTENT-ROUTER-ERROR"
     assert router.questions == [request.transcript]
 
 
@@ -1954,6 +1959,45 @@ def test_intent_router_risk_flag_allows_a_grounded_knowledge_answer(
     event = json.loads(event_record.getMessage().removeprefix("turn_decision "))
     assert event["intent_risk_flags"] == [risk_flag]
     assert event["intent_router_applied"] is True
+
+
+def test_account_closure_question_reaches_published_knowledge() -> None:
+    base = published_document()
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={
+                "knowledge_id": "K-ACCOUNT-CLOSURE",
+                "title": "如何註銷帳券帳戶",
+                "standard_answer": "請由本人攜帶身分證與原留印鑑至分公司辦理銷戶。",
+                "allowed_intents": ["faq_general_guidance"],
+                "question_variants": [
+                    QuestionVariant(
+                        variant_id="account-closure-how-to",
+                        question_text="註銷證券帳戶要怎麼辦理",
+                        usage=QuestionVariantUsage.RETRIEVAL,
+                    )
+                ],
+            }
+        ),
+        source=base.source,
+    )
+    router = StaticIntentRouter(candidate_intents=["account_closure_general"])
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+
+    response = make_client(service).post(
+        "/v1/turns/evaluate",
+        json={"transcript": "註銷證券帳戶要怎麼辦理?", "channel": "web"},
+    )
+
+    result = response.json()["result"]
+    assert result["decision"] == "answer"
+    assert result["intent"] == "account_closure_general"
+    assert result["answer_id"] == "K-ACCOUNT-CLOSURE"
 
 
 def test_intent_router_risk_flag_without_knowledge_match_refuses_safely() -> None:

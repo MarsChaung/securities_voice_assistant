@@ -79,6 +79,8 @@ from policy import DomainPolicyEngine, PolicyAction
         ("美股交易時間有哪些", PolicyAction.ALLOW, "public_service_information"),
         ("什麼是美股交易時間", PolicyAction.ALLOW, "public_service_information"),
         ("請說明美股的交易時段", PolicyAction.ALLOW, "public_service_information"),
+        ("註銷證券帳戶要怎麼辦理?", PolicyAction.ALLOW, "account_closure_general"),
+        ("我要如何銷戶？", PolicyAction.ALLOW, "account_closure_general"),
         ("我想申訴這次服務", PolicyAction.HANDOFF, "complaint_or_dispute"),
         ("台積電明天怎麼樣", PolicyAction.REFUSE, "unknown_or_ambiguous"),
         ("下單台積電", PolicyAction.REFUSE, "unknown_or_ambiguous"),

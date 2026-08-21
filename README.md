@@ -66,6 +66,15 @@ Runtime、PostgreSQL、知識治理中心、LLM structured output、選用的 em
 `SVA_SYSTEM_DIAGNOSTICS_ENABLED=true`，也應依模型冷啟動時間調整
 `SVA_SYSTEM_DIAGNOSTICS_TIMEOUT_SECONDS`。
 
+LLM 結構化輸出預設使用 `SVA_LLM_STRUCTURED_OUTPUT_MODE=auto`。模型 ID 包含
+`gpt-oss` 時會使用強制 Tool Call，避開 Harmony 模型在部分 OpenAI 相容服務中使用
+`response_format=json_schema` 可能回傳空白 `message.content` 的問題；其他模型維持
+JSON Schema。若服務能力已經過獨立驗證，也可明確設成 `json_schema` 或 `tool_call`。
+GPT-OSS 會先使用部分輸出額度進行推理，因此意圖、對話與回答的結構化輸出預設各保留
+768 tokens；可分別用 `SVA_INTENT_LLM_MAX_TOKENS`、
+`SVA_CONVERSATION_LLM_MAX_TOKENS` 與 `SVA_ANSWER_LLM_MAX_TOKENS` 調整。
+這些環境變數不需要重建 image，更新 `.env` 後重新建立 orchestrator container 即可生效。
+
 語音客服測試：<http://127.0.0.1:8080/voice-test>。可調整 ASR 模型、插話靈敏度與
 本機招呼語，並檢視 Runtime、ASR、TTS 與即時辨識狀態；AI 回答字幕會依語音實際起播
 時點分段顯示。自訂招呼語 TTS 端點只在 `development` 開放，內容不會保存。
@@ -95,6 +104,7 @@ Phase 3.2 的受控答案生成目前只啟用 Shadow；使用者仍會看到人
 ```bash
 SVA_ANSWER_MODE=shadow_llm
 SVA_ANSWER_LLM_MODEL=Qwen3.6-35B-A3B-oQ4
+SVA_LLM_STRUCTURED_OUTPUT_MODE=auto
 SVA_SHADOW_MAX_PENDING=8
 SVA_LLM_API_KEY=<local-api-key>
 ```
@@ -112,12 +122,14 @@ SVA_LLM_API_KEY=<local-api-key>
 SVA_ANSWER_MODE=exact
 SVA_NATURAL_ANSWER_ENABLED=true
 SVA_ANSWER_LLM_MODEL=Qwen3.6-35B-A3B-oQ4
+SVA_ANSWER_LLM_MAX_TOKENS=768
 SVA_LLM_API_KEY=<local-api-key>
 # 僅限本機問題定位；非敏感測試問答會連同 session ID 寫入 log。
 SVA_VOICE_TEST_CONTENT_LOGGING_ENABLED=true
 # 混合式追問解析可先使用 shadow，通過合成評測後再切 controlled。
 SVA_CONVERSATION_SEMANTIC_MODE=controlled
 SVA_CONVERSATION_LLM_MODEL=Qwen3.6-35B-A3B-oQ4
+SVA_CONVERSATION_LLM_MAX_TOKENS=768
 SVA_CONVERSATION_SEMANTIC_MINIMUM_CONFIDENCE=0.85
 ```
 
@@ -136,6 +148,7 @@ session ID 搜尋文字代測與語音問答；偵測到個資的輪次一律遮
 ```bash
 SVA_INTENT_ROUTER_MODE=controlled
 SVA_INTENT_LLM_MODEL=Qwen3.6-35B-A3B-oQ4
+SVA_INTENT_LLM_MAX_TOKENS=768
 SVA_INTENT_ROUTER_MINIMUM_CONFIDENCE=0.8
 SVA_LLM_API_KEY=<local-api-key>
 ```
@@ -187,6 +200,26 @@ docker compose up --build
 ```
 
 Compose 會啟動 PostgreSQL、orchestrator API 與知識治理中心，所有 host port 都只綁定 `127.0.0.1`。PostgreSQL 資料保存在 `knowledge-db` volume；oMLX 與 MLX Audio 維持宿主機上的獨立推論服務，orchestrator 透過 `host.docker.internal` 呼叫。
+
+Compose 將瀏覽器公開 URL 與容器內部 URL 分開。公司環境若模型 API 或頁面有不同 DNS，
+可在 `.env` 設定：
+
+```bash
+# orchestrator 容器內使用
+SVA_KNOWLEDGE_ADMIN_INTERNAL_URL=http://knowledge-admin:8081/admin/knowledge
+SVA_LLM_DOCKER_BASE_URL=http://llm-api.company.example/v1
+SVA_EMBEDDINGS_DOCKER_BASE_URL=http://embedding-api.company.example/v1
+SVA_TTS_DOCKER_BASE_URL=http://audio-api.company.example/v1
+
+# 使用者瀏覽器必須能開啟
+SVA_KNOWLEDGE_ADMIN_URL=https://sva.company.example/admin/knowledge
+SVA_VOICE_TEST_URL=https://sva.company.example/voice-test
+SVA_SYSTEM_DIAGNOSTICS_URL=https://sva.company.example/system-diagnostics
+SVA_AUDIO_PUBLIC_BASE_URL=https://audio.company.example/v1
+```
+
+容器內服務不可用 `127.0.0.1` 連到另一個 container 或 Docker host；但瀏覽器 public URL
+在單機開發使用 `127.0.0.1` 是合理設定。
 
 ## 尚待 Phase 0 核准
 

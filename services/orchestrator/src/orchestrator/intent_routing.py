@@ -8,6 +8,12 @@ from typing import Literal, Protocol
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .structured_output import (
+    StructuredOutputMode,
+    structured_output_content,
+    structured_output_options,
+)
+
 
 class IntentRouterMode(StrEnum):
     DISABLED = "disabled"
@@ -18,6 +24,7 @@ class IntentRouterMode(StrEnum):
 AllowedIntent = Literal[
     "app_public_help",
     "account_opening_general",
+    "account_closure_general",
     "public_service_information",
     "general_securities_knowledge",
     "order_entry_tutorial",
@@ -61,25 +68,14 @@ class IntentRouter(Protocol):
     def route(self, question: str) -> IntentRouteResult: ...
 
 
-class _ChatMessage(BaseModel):
-    content: str
-
-
-class _ChatChoice(BaseModel):
-    message: _ChatMessage
-
-
-class _ChatCompletion(BaseModel):
-    choices: list[_ChatChoice]
-
-
 class OpenAICompatibleIntentRouter:
-    PROMPT_VERSION = "intent-router-v3"
+    PROMPT_VERSION = "intent-router-v4"
     SYSTEM_PROMPT = """你是證券知識助手的意圖分類器，只能分類，不得回答問題。
 根據整句語意分類，不可只靠固定關鍵字。只輸出指定 JSON 物件。
 
 可用意圖：
 - account_opening_general：證券帳戶、美股交易帳戶、複委託帳戶的開立、申請或加開流程與一般資格。
+- account_closure_general：證券帳戶、帳券帳戶的註銷、銷戶、停用流程，以及銷戶後重新開戶的公開規則。
 - public_service_information：每日交易時段、營業或服務時間、公開費率、手續費、客服與聯絡方式。
   商品規則何時生效、扣款日遇休市如何處理，不屬於此類。
 - general_securities_knowledge：證券名詞、差異、交割、商品規則與一般概念；不包含上述更具體意圖。
@@ -99,6 +95,8 @@ class OpenAICompatibleIntentRouter:
 
 candidate_intents 依可能性排序，最多兩個。若有風險、語意不完整或無法可靠分類，
 使用 unknown 或 needs_clarification=true，不得為了提高回答率而猜測。
+詢問帳戶註銷、銷戶或停用的公開辦理流程屬 account_closure_general，
+不等於查詢個人帳戶狀態，不得標記 personal_account_or_status。
 詢問 App 如何設定定期投資或如何操作下單介面屬公開教學，不等於要求助手執行交易，
 不得標記 transaction_execution。只有要求「幫我／替我」實際執行交易才標記該風險。
 
@@ -106,6 +104,7 @@ candidate_intents 依可能性排序，最多兩個。若有風險、語意不�
 -「國泰證券 App 要怎麼設定固定每月買台股？」=> app_public_help，無風險。
 -「美股定期投資有哪些扣款作法？」=> general_securities_knowledge，無風險。
 -「扣款日遇到股市休市如何處理？」=> general_securities_knowledge，無風險。
+-「註銷證券帳戶要怎麼辦理？」=> account_closure_general，無風險。
 -「請幫我下單買進範例公司」=> unknown，transaction_execution。
 -「美股定期投資可以買嗎？」=> unknown，investment_advice。
 
@@ -120,11 +119,15 @@ candidate_intents 依可能性排序，最多兩個。若有風險、語意不�
         model: str,
         api_key: str | None = None,
         timeout_seconds: float = 8.0,
+        max_tokens: int = 768,
+        structured_output_mode: StructuredOutputMode = "auto",
         client: httpx.Client | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
+        self._max_tokens = max_tokens
+        self._structured_output_mode = structured_output_mode
         self._client = client or httpx.Client(timeout=timeout_seconds)
         self._prompt_hash = hashlib.sha256(self.SYSTEM_PROMPT.encode()).hexdigest()
 
@@ -141,15 +144,13 @@ candidate_intents 依可能性排序，最多兩個。若有風險、語意不�
                 json={
                     "model": self._model,
                     "temperature": 0,
-                    "max_tokens": 220,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "intent_classification",
-                            "strict": True,
-                            "schema": IntentClassification.model_json_schema(),
-                        },
-                    },
+                    "max_tokens": self._max_tokens,
+                    **structured_output_options(
+                        name="intent_classification",
+                        schema=IntentClassification.model_json_schema(),
+                        mode=self._structured_output_mode,
+                        model=self._model,
+                    ),
                     "messages": [
                         {"role": "system", "content": self.SYSTEM_PROMPT},
                         {
@@ -163,11 +164,13 @@ candidate_intents 依可能性排序，最多兩個。若有風險、語意不�
                 },
             )
             response.raise_for_status()
-            completion = _ChatCompletion.model_validate(response.json())
-            if not completion.choices:
-                raise ValueError("missing choice")
             classification = IntentClassification.model_validate_json(
-                completion.choices[0].message.content
+                structured_output_content(
+                    response.json(),
+                    name="intent_classification",
+                    mode=self._structured_output_mode,
+                    model=self._model,
+                )
             )
         except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as error:
             raise IntentRoutingError("structured intent routing failed") from error
