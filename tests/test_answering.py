@@ -338,6 +338,32 @@ def test_focus_approved_answer_extracts_attendance_requirement() -> None:
     assert focused == "開戶時未成年人及父母雙方都要親臨櫃台辦理。"
 
 
+def test_focus_approved_answer_prioritizes_current_document_question_over_history() -> None:
+    standard_answer = (
+        "未成年人及父母雙方應親臨櫃台辦理。\n"
+        "未成年人及法定代理人（父母雙方）應備文件："
+        "身分證、健保卡（或其他第二證明文件等）及印章。\n"
+        "未滿14歲且尚未申領身分證者，應提供最近3個月內戶籍謄本或新式戶口名簿。\n"
+        "由父母其中一方單獨辦理時，應攜帶詳細記事的新式戶口名簿或戶籍謄本。"
+    )
+
+    focused = focus_approved_answer(
+        standard_answer=standard_answer,
+        current_utterance="剛剛你說，父母要帶什麼證件?",
+        resolved_query=(
+            "未成年人要怎麼開證券戶；使用者追問：開戶時，小孩也要到場嗎?；"
+            "使用者追問：剛剛你說，父母要帶什麼證件?"
+        ),
+    )
+
+    assert focused == (
+        "未成年人及法定代理人（父母雙方）應備文件："
+        "身分證、健保卡（或其他第二證明文件等）及印章。\n"
+        "未滿14歲且尚未申領身分證者，應提供最近3個月內戶籍謄本或新式戶口名簿。\n"
+        "由父母其中一方單獨辦理時，應攜帶詳細記事的新式戶口名簿或戶籍謄本。"
+    )
+
+
 def test_focus_approved_answer_extracts_only_application_times() -> None:
     standard_answer = (
         "你可以線上或臨櫃申請。\n"

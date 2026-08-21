@@ -238,6 +238,9 @@ def create_app(
             asr_model=resolved_settings.asr_model or "",
             tts_model=resolved_settings.tts_model or "",
             tts_voice=resolved_settings.tts_voice,
+            tts_convert_traditional_to_simplified=(
+                resolved_settings.tts_convert_traditional_to_simplified
+            ),
             tts_ref_audio=resolved_settings.tts_ref_audio,
             tts_ref_text=(
                 resolved_settings.tts_ref_text.get_secret_value()

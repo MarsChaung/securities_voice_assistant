@@ -376,6 +376,24 @@ wheels = [
 ]
 
 [[package]]
+name = "opencc"
+version = "1.4.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/4a/9fdb46f75751712f5c2ea76fdffe3d08f2b833301263644e1267ef82c1cd/opencc-1.4.1.tar.gz", hash = "sha256:a2c58215626ac5131c5db277766678d552fc296e9e0299ef183cb67c1a7f30e7", size = 11592892, upload-time = "2026-07-12T14:59:55.166Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/a1/7ffacb33571dd4f37c7eccc38c25559f5b015e4246126e56aa575d3ef0b6/opencc-1.4.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:1f4eb3d48bcd4b6a382f27c89e84c12d4e0932c1792d39bb3792e0b51590467b", size = 2096561, upload-time = "2026-07-12T15:03:59.142Z" },
+    { url = "https://files.pythonhosted.org/packages/54/db/eb079ac9a565bf37317108a4c78f8d821cd8e4887baf2ae1912d807ddd33/opencc-1.4.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:f44ae128b3ae69651a171a918d2c707a9388838dc791d23935fed2f0066d7ce2", size = 2000503, upload-time = "2026-07-12T14:57:48.436Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/49/f7d5db22d11efe0f36d566f270a85fed8371ad12b690b3120c8862692f65/opencc-1.4.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:3f64c90aa026d5d69ced1f4b5375e0480408597b785075c3c34ab2ae37f66cd0", size = 2343226, upload-time = "2026-07-12T14:59:42.9Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/07/936ded52b9d3278f055fbb182b47ce7e90648cf701ac339f6743eeb9319f/opencc-1.4.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:dd35957fcdb633b1c262a5c36e57306be8db25de972bf5d700cc17cbef3d98b4", size = 2380661, upload-time = "2026-07-12T14:59:50.703Z" },
+    { url = "https://files.pythonhosted.org/packages/41/85/633a7e51940db4c454c4852559b707a0e30b3edbfef1372e6cee197624d0/opencc-1.4.1-cp312-cp312-win_amd64.whl", hash = "sha256:129d2266a3a1c6e01c57344147f96cbda60557a3c91d083403066c34411aee23", size = 2795541, upload-time = "2026-07-12T15:02:58.556Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/7a/27525cb0a5a402e7dc45b0852c14cb46dde614ff5955e6869d3b64b31684/opencc-1.4.1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:e3b51cff5ad497376d3f04ab7902363fe9dced44646de4db2995403a25e3b017", size = 2096613, upload-time = "2026-07-12T15:04:00.333Z" },
+    { url = "https://files.pythonhosted.org/packages/96/15/0b42694b9ac218335f0dcf4a5b9757d18356fe27d19ec5e4c1872538d2ce/opencc-1.4.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:b7af1032690c00d56cf4858a62c08e6f683a8fbb14a4300bb692516fa45d4ed4", size = 2000591, upload-time = "2026-07-12T14:57:49.666Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/2f/4e981646fc6dea7438f2612608f4a6a9780c6b1c580f0d4a127c24c270a1/opencc-1.4.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:0afecd22b3963bc1ac96069a5e8c1ba3f4800708360b5a67ab8b302a0271fdc6", size = 2343323, upload-time = "2026-07-12T14:59:44.241Z" },
+    { url = "https://files.pythonhosted.org/packages/26/f0/2f34d136eaf456e4b31d5662a2d23da1e9362cab6a74825d3dbb397b5e72/opencc-1.4.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4f7fe2e9a7abd48543e332783dcc6ad2ffc9b93d98fffdd5cf9a91512ef894eb", size = 2380744, upload-time = "2026-07-12T14:59:52.08Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/98/2941f2d1be297155fcb60ccb781e3525fb3d6e5ea092f2515dc7cc2a8494/opencc-1.4.1-cp313-cp313-win_amd64.whl", hash = "sha256:f2bc683dbb0b175357a6558d2802d9a2fe158c078d0564714cf43aeb9bd42249", size = 2795565, upload-time = "2026-07-12T15:02:59.902Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -651,6 +669,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "opencc" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -674,6 +693,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jinja2", specifier = ">=3.1,<4" },
+    { name = "opencc", specifier = ">=1.4.1,<2" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pydantic", specifier = ">=2.10,<3" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },

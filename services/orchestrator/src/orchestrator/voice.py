@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 import httpx
+from opencc import OpenCC
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from observability import SafeAuditLogger
@@ -271,6 +272,7 @@ class VoiceService:
         asr_model: str,
         tts_model: str,
         tts_voice: str,
+        tts_convert_traditional_to_simplified: bool = False,
         tts_ref_audio: str | None = None,
         tts_ref_text: str | None = None,
         timeout_seconds: float = 180.0,
@@ -279,6 +281,9 @@ class VoiceService:
     ) -> None:
         self.audio_public_base_url = audio_public_base_url.rstrip("/")
         self.models = VoiceModels(asr=asr_model, tts=tts_model, voice=tts_voice)
+        self._tts_text_converter = (
+            OpenCC("tw2s.json") if tts_convert_traditional_to_simplified else None
+        )
         if bool(tts_ref_audio) != bool(tts_ref_text):
             raise ValueError("voice clone requires both reference audio and text")
         self._tts_ref_audio = tts_ref_audio
@@ -380,9 +385,12 @@ class VoiceService:
         turn_id: str,
         sentence_index: int,
     ) -> AsyncIterator[bytes]:
+        tts_input = (
+            self._tts_text_converter.convert(text) if self._tts_text_converter is not None else text
+        )
         payload = {
             "model": self.models.tts,
-            "input": text,
+            "input": tts_input,
             "voice": self.models.voice,
             "lang_code": "Chinese",
             "instruct": "使用自然、親切的台灣國語口音說話。",

@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     asr_candidate_model: str | None = None
     tts_model: str | None = None
     tts_voice: str = "Vivian"
+    tts_convert_traditional_to_simplified: bool = False
     tts_ref_audio: str | None = None
     tts_ref_text: SecretStr | None = None
     voice_timeout_seconds: float = Field(default=180.0, gt=0)
