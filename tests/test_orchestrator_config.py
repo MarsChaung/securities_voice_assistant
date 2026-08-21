@@ -55,6 +55,10 @@ def test_system_diagnostics_are_disabled_by_default() -> None:
     assert Settings.model_fields["system_diagnostics_timeout_seconds"].default == 30.0
 
 
+def test_tts_traditional_to_simplified_conversion_is_disabled_by_default() -> None:
+    assert Settings.model_fields["tts_convert_traditional_to_simplified"].default is False
+
+
 def test_compose_separates_public_and_container_service_urls() -> None:
     compose = (ROOT / "compose.yaml").read_text()
 
@@ -62,6 +66,7 @@ def test_compose_separates_public_and_container_service_urls() -> None:
     assert "http://knowledge-admin:8081/admin/knowledge" in compose
     assert "SVA_LLM_DOCKER_BASE_URL" in compose
     assert "SVA_TTS_DOCKER_BASE_URL" in compose
+    assert "SVA_TTS_CONVERT_TRADITIONAL_TO_SIMPLIFIED" in compose
 
 
 def test_hybrid_retrieval_requires_an_embedding_model() -> None:

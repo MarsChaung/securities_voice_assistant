@@ -79,6 +79,10 @@ _OPERATION_ANSWER_PATTERN = re.compile(
 )
 _APPROVED_ANSWER_FOCUS_RULES = (
     (
+        re.compile(r"證件|文件|要帶|攜帶|應備"),
+        re.compile(r"應備文件|身分證|健保卡|印章|戶籍謄本|戶口名簿"),
+    ),
+    (
         re.compile(
             r"到場|親臨|本人|親自|"
             r"(?:小孩|未成年人).{0,6}(?:要去|要來|需要去|需要到)"
@@ -203,15 +207,25 @@ def focus_approved_answer(
     resolved_query: str | None = None,
     focus: str | None = None,
 ) -> str | None:
-    focus_query = "；".join(part for part in (current_utterance, resolved_query, focus) if part)
+    current_focus_query = "；".join(part for part in (current_utterance, focus) if part)
+    focus_query = "；".join(part for part in (current_focus_query, resolved_query) if part)
     answer_pattern = next(
         (
             answer_pattern
             for question_pattern, answer_pattern in _APPROVED_ANSWER_FOCUS_RULES
-            if question_pattern.search(focus_query)
+            if question_pattern.search(current_focus_query)
         ),
         None,
     )
+    if answer_pattern is None:
+        answer_pattern = next(
+            (
+                answer_pattern
+                for question_pattern, answer_pattern in _APPROVED_ANSWER_FOCUS_RULES
+                if question_pattern.search(focus_query)
+            ),
+            None,
+        )
     if answer_pattern is None:
         return None
 

@@ -113,6 +113,7 @@ def voice_service(
     audit_logger: SafeAuditLogger | None = None,
     voice_clone: bool = False,
     asr_model: str = "synthetic-asr",
+    tts_convert_traditional_to_simplified: bool = False,
 ) -> VoiceService:
     return VoiceService(
         audio_base_url="http://audio.test/v1",
@@ -122,6 +123,7 @@ def voice_service(
         tts_voice="Vivian",
         tts_ref_audio="/private/reference.wav" if voice_clone else None,
         tts_ref_text="合成參考逐字稿" if voice_clone else None,
+        tts_convert_traditional_to_simplified=tts_convert_traditional_to_simplified,
         audit_logger=audit_logger,
         client=httpx.AsyncClient(
             base_url="http://audio.test/v1/",
@@ -264,6 +266,7 @@ def test_voice_service_streams_audio_and_logs_no_answer_text() -> None:
         assert request.url == "http://audio.test/v1/audio/speech"
         payload = json.loads(request.content)
         assert payload["model"] == "synthetic-tts"
+        assert payload["input"] == answer
         assert payload["voice"] == "Vivian"
         assert payload["stream"] is True
         assert payload["ref_audio"] == "/private/reference.wav"
@@ -295,6 +298,34 @@ def test_voice_service_streams_audio_and_logs_no_answer_text() -> None:
     assert audit.events[0]["turn_id"] == "turn-voice"
     assert audit.events[0]["audio_chunk_count"] == 1
     assert answer not in json.dumps(audit.events[0], ensure_ascii=False)
+
+
+def test_voice_service_can_convert_only_tts_input_to_simplified_chinese() -> None:
+    frame = make_wav_frame()
+    answer = "這是繁體中文語音測試，請確認證券帳戶。"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["input"] == "这是繁体中文语音测试，请确认证券帐户。"
+        return httpx.Response(200, content=frame)
+
+    service = voice_service(
+        httpx.MockTransport(handler),
+        tts_convert_traditional_to_simplified=True,
+    )
+
+    async def collect() -> list[dict[str, object]]:
+        events = [
+            json.loads(payload)
+            async for payload in service.stream_answer(turn_id="turn-voice", answer=answer)
+        ]
+        await service.close()
+        return events
+
+    events = asyncio.run(collect())
+
+    assert events[-1]["type"] == "done"
+    assert split_tts_text(answer) == [answer]
 
 
 @pytest.mark.parametrize(
@@ -354,16 +385,19 @@ def test_voice_service_reports_governed_error_for_tts_failures(
 
 def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     frame = make_wav_frame()
+    tts_inputs: list[str] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
             return httpx.Response(200, json={"message": "ok"})
+        tts_inputs.append(json.loads(request.content)["input"])
         return httpx.Response(200, content=frame)
 
     voice = voice_service(
         httpx.MockTransport(handler),
         voice_clone=True,
         asr_model="mlx-community/Qwen3-ASR-1.7B-8bit",
+        tts_convert_traditional_to_simplified=True,
     )
     settings = Settings(
         database_url="sqlite+pysqlite:///:memory:",
@@ -374,6 +408,7 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
         asr_model="mlx-community/Qwen3-ASR-1.7B-8bit",
         asr_candidate_model="mlx-community/whisper-large-v3-turbo-asr-fp16",
         tts_model="synthetic-tts",
+        tts_convert_traditional_to_simplified=True,
         voice_test_content_logging_enabled=False,
     )
 
@@ -423,6 +458,8 @@ def test_voice_endpoint_runs_policy_pipeline_before_streaming_tts() -> None:
     assert "合成參考逐字稿" not in config.text
     assert events[0]["type"] == "turn"
     assert events[0]["speech_segments"] == [turn["result"]["answer"]]
+    assert "沒有" in events[0]["speech_segments"][0]
+    assert tts_inputs == ["目前没有足够且有效的已发布知识来源可回答，请改用官方客服管道。"]
     assert turn["result"]["decision"] == "refuse"
     assert turn["result"]["policy_rule_id"] == "KNO-001"
     assert events[1]["type"] == "audio"

@@ -163,6 +163,7 @@ SVA_ASR_MODEL=mlx-community/Qwen3-ASR-1.7B-8bit
 SVA_ASR_CANDIDATE_MODEL=mlx-community/whisper-large-v3-turbo-asr-fp16
 SVA_TTS_MODEL=mlx-community/Qwen3-TTS-12Hz-0.6B-Base-6bit
 SVA_TTS_VOICE=Vivian
+SVA_TTS_CONVERT_TRADITIONAL_TO_SIMPLIFIED=false
 SVA_TTS_REF_AUDIO=<宿主機上的授權參考音檔絕對路徑>
 SVA_TTS_REF_TEXT=<參考音檔逐字稿>
 SVA_BARGE_IN_ENABLED=true
@@ -170,6 +171,8 @@ SVA_BARGE_IN_DEFAULT_MODE=standard
 ```
 
 `SVA_ASR_MODEL` 是預設模型，目前依 Web Pilot 實測採用 `Qwen3-ASR-1.7B-8bit`；`SVA_ASR_CANDIDATE_MODEL` 保留 Whisper 作為 A/B 對照與備援。設定候選模型後，Web Pilot 會顯示 A/B 選單，停止語音工作階段時可在兩個受控模型間切換。Barge-in 預設以 AudioWorklet 在瀏覽器持續監聽：本機音量門檻先降低 TTS 音量，MLX Audio WebRTC VAD 確認為新的人聲後才中斷播放並保留 ASR pre-roll。`SVA_BARGE_IN_DEFAULT_MODE` 可設為 `sensitive`、`standard` 或 `resistant`，Web Pilot 也能在語音工作階段開始前切換。自然回答通過個資與確定性政策後，若超過 `SVA_VOICE_ACKNOWLEDGEMENT_DELAY_MS` 仍未就緒，會先播放瀏覽器預載的短提示音；快速回答、拒答、轉人工與結束語不播放。`SVA_TTS_REF_AUDIO` 與 `SVA_TTS_REF_TEXT` 必須同時設定，且只能保存在被 Git 忽略的 `.env`。MLX Audio 執行於宿主機，因此收到的是宿主機絕對路徑，不需將參考音檔掛載進 orchestrator 容器。瀏覽器只直連 MLX Audio 的即時 ASR WebSocket；LLM API key、意圖路由、知識檢索及 TTS 呼叫都留在後端。`POST /v1/voice/respond-stream` 不接受任意朗讀文字，只接受 ASR 逐字稿，並強制先執行與文字問答相同的政策及知識流程。TTS 仍透過 MLX Audio API，回答依 `，。？、` 與換行優先在 80 字附近分段，找不到合適切點時才於 96 字硬切。一般 log 不保存音訊、逐字稿、參考素材或答案全文，只記 TTS 模型、分段／音訊片段數、播放延遲、提示音類型、插話模式及觸發時間。詳見 [ADR-0006](docs/architecture_decisions/0006-realtime-voice-pilot.md)。
+
+`SVA_TTS_CONVERT_TRADITIONAL_TO_SIMPLIFIED=true` 時，只有送往 TTS API 的 `input` 會先由台灣正體轉為簡體；網頁答案與字幕仍保留繁體中文。
 
 Demo 前的預熱、允許／拒答案例、插話中斷與人工口音驗收步驟，請依 [即時語音 Web Pilot Demo 清單](docs/demo/voice-pilot-checklist.md) 執行。
 

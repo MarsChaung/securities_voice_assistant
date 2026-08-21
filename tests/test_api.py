@@ -1889,6 +1889,79 @@ def test_unknown_prefetched_intent_is_rerouted_after_context_resolution() -> Non
     assert router.questions == [request.transcript, "什麼是台股定期定額？"]
 
 
+def test_unknown_follow_up_intent_is_rerouted_with_accumulated_context() -> None:
+    base = published_document()
+    expected_answer = (
+        "未成年人及法定代理人（父母雙方）應備文件："
+        "身分證、健保卡（或其他第二證明文件等）及印章。\n"
+        "未滿14歲且尚未申領身分證者，應提供最近3個月內戶籍謄本或新式戶口名簿。\n"
+        "由父母其中一方單獨辦理時，應攜帶詳細記事的新式戶口名簿或戶籍謄本。"
+    )
+    document = KnowledgeDocument(
+        item=base.item.model_copy(
+            update={"standard_answer": (f"未成年人及父母雙方應親臨櫃台辦理。\n{expected_answer}")}
+        ),
+        source=base.source,
+    )
+
+    class ContextAwareIntentRouter:
+        def __init__(self) -> None:
+            self.questions: list[str] = []
+
+        def route(self, question: str) -> IntentRouteResult:
+            self.questions.append(question)
+            candidate_intent = (
+                "account_opening_general" if "未成年人要怎麼開證券戶" in question else "unknown"
+            )
+            return IntentRouteResult(
+                classification=IntentClassification.model_validate(
+                    {
+                        "candidate_intents": [candidate_intent],
+                        "confidence": 0.95,
+                        "risk_flags": [],
+                        "needs_clarification": False,
+                    }
+                ),
+                model_id="synthetic-intent-model",
+                prompt_version="intent-router-v3",
+                prompt_hash="b" * 64,
+                latency_ms=9.5,
+            )
+
+    router = ContextAwareIntentRouter()
+    service = TurnService(
+        knowledge_repository=StaticKnowledgeRepository((document,)),
+        natural_answer_composer=StaticNaturalAnswerComposer(),
+        intent_router_mode="controlled",
+        intent_router=router,
+        clock=lambda: datetime(2026, 7, 20, tzinfo=UTC),
+    )
+    request = TurnRequest(
+        transcript="剛剛你說，父母要帶什麼證件?",
+        channel="voice",
+    )
+    resolved_query = (
+        "未成年人要怎麼開證券戶；使用者追問：開戶時，小孩也要到場嗎?；"
+        "使用者追問：剛剛你說，父母要帶什麼證件?"
+    )
+
+    prefetched = service.prefetch_intent_route(request)
+    response = service.evaluate(
+        request,
+        conversation=ConversationResolution(
+            kind=FollowUpKind.ELABORATE,
+            retrieval_query=resolved_query,
+            history=(),
+            reference_knowledge_id=document.item.knowledge_id,
+        ),
+        prefetched_intent_route=prefetched,
+    )
+
+    assert response.result.decision.value == "answer"
+    assert response.result.answer == expected_answer
+    assert router.questions == [request.transcript, resolved_query]
+
+
 def test_prefetch_skips_intent_router_when_sensitive_data_is_detected() -> None:
     router = StaticIntentRouter(candidate_intents=["general_securities_knowledge"])
     service = TurnService(intent_router_mode="controlled", intent_router=router)

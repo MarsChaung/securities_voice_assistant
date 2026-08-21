@@ -303,10 +303,10 @@ class TurnService:
             and conversation.kind is not FollowUpKind.NEW_QUESTION
             and self._can_apply_conversation_context(policy_result)
         ):
+            policy_question = conversation.retrieval_query
             contextual_result = self._policy_engine.classify(conversation.retrieval_query)
             if contextual_result.action is PolicyAction.ALLOW:
                 policy_result = contextual_result
-                policy_question = conversation.retrieval_query
         timing.policy_guard_latency_ms = (perf_counter() - started_at) * 1_000
         if self._can_use_intent_router(policy_result):
             reusable_intent_route = self._reusable_prefetched_intent_route(
