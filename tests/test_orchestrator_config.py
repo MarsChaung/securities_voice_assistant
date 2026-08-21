@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,6 +19,8 @@ from orchestrator.conversation import OpenAICompatibleConversationSemanticAnalyz
 from orchestrator.intent_routing import OpenAICompatibleIntentRouter
 from retrieval import HybridKnowledgeRetriever, LexicalKnowledgeRetriever
 
+ROOT = Path(__file__).parents[1]
+
 
 def test_lexical_retrieval_remains_the_default() -> None:
     assert Settings.model_fields["retrieval_mode"].default == "lexical"
@@ -30,6 +34,7 @@ def test_lexical_retrieval_remains_the_default() -> None:
 
 def test_exact_answer_mode_remains_the_default() -> None:
     assert Settings.model_fields["answer_mode"].default == "exact"
+    assert Settings.model_fields["llm_structured_output_mode"].default == "auto"
     settings = Settings(
         database_url="sqlite+pysqlite:///:memory:",
         retrieval_mode="lexical",
@@ -39,9 +44,24 @@ def test_exact_answer_mode_remains_the_default() -> None:
     assert _build_answer_composer(settings) is None
 
 
+def test_structured_llm_output_budgets_default_to_gpt_oss_safe_values() -> None:
+    assert Settings.model_fields["answer_llm_max_tokens"].default == 768
+    assert Settings.model_fields["intent_llm_max_tokens"].default == 768
+    assert Settings.model_fields["conversation_llm_max_tokens"].default == 768
+
+
 def test_system_diagnostics_are_disabled_by_default() -> None:
     assert Settings.model_fields["system_diagnostics_enabled"].default is False
     assert Settings.model_fields["system_diagnostics_timeout_seconds"].default == 30.0
+
+
+def test_compose_separates_public_and_container_service_urls() -> None:
+    compose = (ROOT / "compose.yaml").read_text()
+
+    assert "SVA_KNOWLEDGE_ADMIN_INTERNAL_URL" in compose
+    assert "http://knowledge-admin:8081/admin/knowledge" in compose
+    assert "SVA_LLM_DOCKER_BASE_URL" in compose
+    assert "SVA_TTS_DOCKER_BASE_URL" in compose
 
 
 def test_hybrid_retrieval_requires_an_embedding_model() -> None:

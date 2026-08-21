@@ -61,7 +61,8 @@ def passing_settings() -> Settings:
         system_diagnostics_enabled=True,
         system_diagnostics_timeout_seconds=5,
         database_url="sqlite+pysqlite:///:memory:",
-        knowledge_admin_url=HttpUrl("http://knowledge.test/admin/knowledge"),
+        knowledge_admin_url=HttpUrl("http://knowledge-browser.test/admin/knowledge"),
+        knowledge_admin_internal_url=HttpUrl("http://knowledge.test/admin/knowledge"),
         llm_base_url=HttpUrl("http://llm.test/v1"),
         answer_mode="exact",
         answer_llm_model="gpt-oss:20b",
@@ -84,12 +85,29 @@ def test_system_diagnostics_exercises_runtime_llm_tts_and_builds_browser_probe()
         if request.url == "http://llm.test/v1/chat/completions":
             request_payload = json.loads(request.content)
             assert request_payload["model"] == "gpt-oss:20b"
-            assert request_payload["response_format"]["type"] == "json_schema"
+            assert request_payload["max_tokens"] == 768
+            assert "response_format" not in request_payload
+            assert request_payload["tool_choice"]["function"]["name"] == "system_diagnostic"
+            assert "必須呼叫 system_diagnostic 工具" in request_payload["messages"][0]["content"]
+            assert request_payload["messages"][1]["content"] == "請執行連線診斷。"
             return httpx.Response(
                 200,
                 json={
                     "choices": [
-                        {"message": {"content": '{"diagnostic_status":"ok"}'}}
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "tool_calls": [
+                                    {
+                                        "type": "function",
+                                        "function": {
+                                            "name": "system_diagnostic",
+                                            "arguments": '{"diagnostic_status":"ok"}',
+                                        },
+                                    }
+                                ],
+                            }
+                        }
                     ]
                 },
             )
@@ -129,10 +147,46 @@ def test_system_diagnostics_exercises_runtime_llm_tts_and_builds_browser_probe()
     assert checks["tts"].status is DiagnosticStatus.PASS
     assert checks["asr_configuration"].status is DiagnosticStatus.PASS
     assert report.browser_asr_probe is not None
-    assert report.browser_asr_probe.url == (
-        "ws://127.0.0.1:8000/v1/audio/transcriptions/realtime"
-    )
+    assert report.browser_asr_probe.url == ("ws://127.0.0.1:8000/v1/audio/transcriptions/realtime")
     assert report.browser_asr_probe.init_message["semantic_endpointing"] is True
+
+
+def test_system_diagnostics_reports_tts_transport_failure_precisely() -> None:
+    async def audio_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("synthetic connection failure", request=request)
+
+    async def run() -> DiagnosticCheck:
+        voice = VoiceService(
+            audio_base_url="http://audio.test/v1",
+            audio_public_base_url="http://audio.test/v1",
+            asr_model="synthetic-asr",
+            tts_model="synthetic-tts",
+            tts_voice="synthetic-voice",
+            client=httpx.AsyncClient(transport=httpx.MockTransport(audio_handler)),
+        )
+        runner = SystemDiagnosticRunner(
+            settings=Settings(
+                system_diagnostics_enabled=True,
+                voice_enabled=True,
+                asr_model="synthetic-asr",
+                tts_model="synthetic-tts",
+                tts_base_url=HttpUrl("http://audio.test/v1"),
+                audio_public_base_url=HttpUrl("http://audio.test/v1"),
+            ),
+            service=TurnService(),
+            voice_service=voice,
+        )
+        try:
+            return await runner._check_tts()
+        finally:
+            await runner.close()
+            await voice.close()
+
+    check = asyncio.run(run())
+
+    assert check.status is DiagnosticStatus.FAIL
+    assert check.summary == "orchestrator 無法連線至 TTS API。"
+    assert any("SVA_TTS_BASE_URL" in item for item in check.remediation)
 
 
 def test_system_diagnostics_reports_actionable_failures_without_secrets() -> None:
@@ -170,6 +224,7 @@ def test_system_diagnostics_reports_actionable_failures_without_secrets() -> Non
     assert report.overall_status is DiagnosticStatus.FAIL
     assert checks["configuration"].status is DiagnosticStatus.FAIL
     assert "loopback" in checks["configuration"].summary
+    assert any("SVA_KNOWLEDGE_ADMIN_URL" in item for item in checks["configuration"].remediation)
     assert checks["runtime_database"].status is DiagnosticStatus.FAIL
     assert checks["tts"].status is DiagnosticStatus.FAIL
     assert checks["asr_configuration"].status is DiagnosticStatus.FAIL
@@ -214,6 +269,8 @@ def test_system_diagnostics_page_and_api_are_explicitly_enabled() -> None:
         answer_mode="exact",
         retrieval_mode="lexical",
         voice_enabled=False,
+        knowledge_admin_url=HttpUrl("https://knowledge-browser.test/admin/knowledge"),
+        knowledge_admin_internal_url=HttpUrl("http://knowledge-admin:8081/admin/knowledge"),
     )
 
     with TestClient(
@@ -235,6 +292,8 @@ def test_system_diagnostics_page_and_api_are_explicitly_enabled() -> None:
         )
 
     assert page.status_code == 200
+    assert "https://knowledge-browser.test/admin/knowledge" in page.text
+    assert "http://knowledge-admin:8081" not in page.text
     assert "系統診斷" in page.text
     assert stylesheet.status_code == 200
     assert script.status_code == 200

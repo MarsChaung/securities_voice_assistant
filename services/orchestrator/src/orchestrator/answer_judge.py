@@ -8,6 +8,11 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .answering import AnswerEvidence
+from .structured_output import (
+    StructuredOutputMode,
+    structured_output_content,
+    structured_output_options,
+)
 
 
 class GroundednessAssessment(BaseModel):
@@ -39,18 +44,6 @@ class GroundednessJudgeError(RuntimeError):
     """離線 groundedness judge 失敗；訊息不得包含評測內容。"""
 
 
-class _ChatMessage(BaseModel):
-    content: str
-
-
-class _ChatChoice(BaseModel):
-    message: _ChatMessage
-
-
-class _ChatCompletion(BaseModel):
-    choices: list[_ChatChoice]
-
-
 class OpenAICompatibleGroundednessJudge:
     PROMPT_VERSION = "answer-groundedness-judge-v1"
     SYSTEM_PROMPT = """你是離線答案 groundedness 審查器，不回答使用者問題。
@@ -69,11 +62,13 @@ class OpenAICompatibleGroundednessJudge:
         model: str,
         api_key: str | None = None,
         timeout_seconds: float = 15.0,
+        structured_output_mode: StructuredOutputMode = "auto",
         client: httpx.Client | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
+        self._structured_output_mode = structured_output_mode
         self._client = client or httpx.Client(timeout=timeout_seconds)
         self._prompt_hash = hashlib.sha256(self.SYSTEM_PROMPT.encode()).hexdigest()
 
@@ -101,14 +96,12 @@ class OpenAICompatibleGroundednessJudge:
                     "model": self._model,
                     "temperature": 0,
                     "max_tokens": 180,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "groundedness_assessment",
-                            "strict": True,
-                            "schema": GroundednessAssessment.model_json_schema(),
-                        },
-                    },
+                    **structured_output_options(
+                        name="groundedness_assessment",
+                        schema=GroundednessAssessment.model_json_schema(),
+                        mode=self._structured_output_mode,
+                        model=self._model,
+                    ),
                     "messages": [
                         {"role": "system", "content": self.SYSTEM_PROMPT},
                         {
@@ -119,11 +112,13 @@ class OpenAICompatibleGroundednessJudge:
                 },
             )
             response.raise_for_status()
-            completion = _ChatCompletion.model_validate(response.json())
-            if not completion.choices:
-                raise ValueError("missing choice")
             assessment = GroundednessAssessment.model_validate_json(
-                completion.choices[0].message.content
+                structured_output_content(
+                    response.json(),
+                    name="groundedness_assessment",
+                    mode=self._structured_output_mode,
+                    model=self._model,
+                )
             )
         except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as error:
             raise GroundednessJudgeError("groundedness judge failed") from error

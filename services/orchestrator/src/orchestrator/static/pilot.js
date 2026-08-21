@@ -185,6 +185,17 @@ const decisionLabels = {
   handoff: "轉人工處理",
 };
 
+function decisionLabel(result) {
+  if (result.policy_rule_id === "SYS-INTENT-ROUTER-ERROR") return "意圖路由失敗";
+  if (
+    result.policy_rule_id === "POL-DEFAULT-DENY" ||
+    result.policy_rule_id === "LLM-DEFAULT-DENY"
+  ) {
+    return "未涵蓋的問題";
+  }
+  return decisionLabels[result.decision] || "系統回覆";
+}
+
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -322,7 +333,7 @@ function appendAssistantMessage(
       element(
         "div",
         `decision-badge decision-${result.decision}`,
-        decisionLabels[result.decision] || "系統回覆",
+        decisionLabel(result),
       ),
     );
   }

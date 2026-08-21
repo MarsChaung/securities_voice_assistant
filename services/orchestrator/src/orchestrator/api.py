@@ -126,6 +126,8 @@ def _build_answer_composer(settings: Settings) -> OpenAICompatibleAnswerComposer
         model=settings.answer_llm_model or "",
         api_key=settings.llm_api_key.get_secret_value() if settings.llm_api_key else None,
         timeout_seconds=settings.answer_llm_timeout_seconds,
+        max_tokens=settings.answer_llm_max_tokens,
+        structured_output_mode=settings.llm_structured_output_mode,
     )
 
 
@@ -140,6 +142,8 @@ def _build_natural_answer_composer(
         model=settings.answer_llm_model or "",
         api_key=settings.llm_api_key.get_secret_value() if settings.llm_api_key else None,
         timeout_seconds=settings.answer_llm_timeout_seconds,
+        max_tokens=settings.answer_llm_max_tokens,
+        structured_output_mode=settings.llm_structured_output_mode,
     )
 
 
@@ -152,6 +156,8 @@ def _build_intent_router(settings: Settings) -> OpenAICompatibleIntentRouter | N
         model=settings.intent_llm_model or "",
         api_key=settings.llm_api_key.get_secret_value() if settings.llm_api_key else None,
         timeout_seconds=settings.intent_llm_timeout_seconds,
+        max_tokens=settings.intent_llm_max_tokens,
+        structured_output_mode=settings.llm_structured_output_mode,
     )
 
 
@@ -166,6 +172,8 @@ def _build_conversation_semantic_analyzer(
         model=settings.conversation_llm_model or "",
         api_key=settings.llm_api_key.get_secret_value() if settings.llm_api_key else None,
         timeout_seconds=settings.conversation_llm_timeout_seconds,
+        max_tokens=settings.conversation_llm_max_tokens,
+        structured_output_mode=settings.llm_structured_output_mode,
     )
 
 
@@ -239,10 +247,7 @@ def create_app(
             timeout_seconds=resolved_settings.voice_timeout_seconds,
         )
     resolved_system_diagnostic_runner = system_diagnostic_runner
-    if (
-        resolved_system_diagnostic_runner is None
-        and resolved_settings.system_diagnostics_enabled
-    ):
+    if resolved_system_diagnostic_runner is None and resolved_settings.system_diagnostics_enabled:
         resolved_system_diagnostic_runner = SystemDiagnosticRunner(
             settings=resolved_settings,
             service=resolved_service,

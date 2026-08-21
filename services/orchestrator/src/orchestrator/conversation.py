@@ -15,6 +15,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from policy import SensitiveDataGuard
 
+from .structured_output import (
+    StructuredOutputMode,
+    structured_output_content,
+    structured_output_options,
+)
+
 
 class ReplyMode(StrEnum):
     EXACT = "exact"
@@ -88,18 +94,6 @@ class ConversationSemanticAnalyzer(Protocol):
     ) -> ConversationSemanticResult: ...
 
 
-class _ChatMessage(BaseModel):
-    content: str
-
-
-class _ChatChoice(BaseModel):
-    message: _ChatMessage
-
-
-class _ChatCompletion(BaseModel):
-    choices: list[_ChatChoice]
-
-
 class OpenAICompatibleConversationSemanticAnalyzer:
     PROMPT_VERSION = "conversation-semantic-v3"
     SYSTEM_PROMPT = """你是證券語音客服的對話語意解析器，只能解析，不得回答問題。
@@ -129,11 +123,15 @@ reference_turn_id=T1，rewritten_query 要明確包含銷戶後重新線上開�
         model: str,
         api_key: str | None = None,
         timeout_seconds: float = 8.0,
+        max_tokens: int = 768,
+        structured_output_mode: StructuredOutputMode = "auto",
         client: httpx.Client | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._api_key = api_key
+        self._max_tokens = max_tokens
+        self._structured_output_mode = structured_output_mode
         self._client = client or httpx.Client(timeout=timeout_seconds)
         self._prompt_hash = hashlib.sha256(self.SYSTEM_PROMPT.encode()).hexdigest()
 
@@ -170,15 +168,13 @@ reference_turn_id=T1，rewritten_query 要明確包含銷戶後重新線上開�
                 json={
                     "model": self._model,
                     "temperature": 0,
-                    "max_tokens": 300,
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "conversation_semantic_resolution",
-                            "strict": True,
-                            "schema": ConversationSemanticAssessment.model_json_schema(),
-                        },
-                    },
+                    "max_tokens": self._max_tokens,
+                    **structured_output_options(
+                        name="conversation_semantic_resolution",
+                        schema=ConversationSemanticAssessment.model_json_schema(),
+                        mode=self._structured_output_mode,
+                        model=self._model,
+                    ),
                     "messages": [
                         {"role": "system", "content": self.SYSTEM_PROMPT},
                         {
@@ -189,11 +185,13 @@ reference_turn_id=T1，rewritten_query 要明確包含銷戶後重新線上開�
                 },
             )
             response.raise_for_status()
-            completion = _ChatCompletion.model_validate(response.json())
-            if not completion.choices:
-                raise ValueError("missing choice")
             assessment = ConversationSemanticAssessment.model_validate_json(
-                completion.choices[0].message.content
+                structured_output_content(
+                    response.json(),
+                    name="conversation_semantic_resolution",
+                    mode=self._structured_output_mode,
+                    model=self._model,
+                )
             )
         except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as error:
             raise ConversationSemanticRoutingError(

@@ -13,6 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .config import Settings
 from .service import TurnService
+from .structured_output import (
+    resolve_structured_output_mode,
+    structured_output_content,
+    structured_output_options,
+)
 from .voice import VoiceService, realtime_asr_url
 
 
@@ -137,6 +142,7 @@ class SystemDiagnosticRunner:
         remediation: list[str] = []
         page = urlsplit(page_origin or "")
         audio = urlsplit(str(self._settings.audio_public_base_url))
+        knowledge_admin = urlsplit(str(self._settings.knowledge_admin_url))
 
         if not self._settings.voice_enabled:
             failures.append("SVA_VOICE_ENABLED 目前為 false")
@@ -147,12 +153,24 @@ class SystemDiagnosticRunner:
         if page.scheme == "https" and audio.scheme == "http":
             failures.append("HTTPS 頁面設定成連線未加密的 ASR HTTP／WebSocket")
             remediation.append("將 SVA_AUDIO_PUBLIC_BASE_URL 改成瀏覽器可達的 HTTPS URL。")
-        if page.hostname and not _is_loopback_host(page.hostname) and _is_loopback_host(
-            audio.hostname
+        if (
+            page.hostname
+            and not _is_loopback_host(page.hostname)
+            and _is_loopback_host(audio.hostname)
         ):
             failures.append("遠端瀏覽器的 ASR Public URL 指向 loopback 位址")
             remediation.append(
                 "SVA_AUDIO_PUBLIC_BASE_URL 不可使用 127.0.0.1 或 localhost；請填公司 DNS 名稱。"
+            )
+        if (
+            page.hostname
+            and not _is_loopback_host(page.hostname)
+            and _is_loopback_host(knowledge_admin.hostname)
+        ):
+            failures.append("遠端瀏覽器的 knowledge-admin Public URL 指向 loopback 位址")
+            remediation.append(
+                "SVA_KNOWLEDGE_ADMIN_URL 不可使用 127.0.0.1 或 localhost；"
+                "請填使用者瀏覽器可達的公司 DNS 名稱。"
             )
         if self._settings.answer_mode == "fixed_message":
             warnings.append("回答模式為 fixed_message，LLM 與自然對話不會套用")
@@ -162,7 +180,9 @@ class SystemDiagnosticRunner:
         status = (
             DiagnosticStatus.FAIL
             if failures
-            else DiagnosticStatus.WARNING if warnings else DiagnosticStatus.PASS
+            else DiagnosticStatus.WARNING
+            if warnings
+            else DiagnosticStatus.PASS
         )
         issues = [*failures, *warnings]
         return _check(
@@ -240,7 +260,9 @@ class SystemDiagnosticRunner:
 
     async def _check_knowledge_admin(self) -> DiagnosticCheck:
         started_at = perf_counter()
-        health_url = _health_url(str(self._settings.knowledge_admin_url))
+        health_url = _health_url(
+            str(self._settings.knowledge_admin_internal_url or self._settings.knowledge_admin_url)
+        )
         try:
             response = await self._client.get(health_url)
             response.raise_for_status()
@@ -292,9 +314,7 @@ class SystemDiagnosticRunner:
             )
 
         headers = _bearer_headers(
-            self._settings.llm_api_key.get_secret_value()
-            if self._settings.llm_api_key
-            else None
+            self._settings.llm_api_key.get_secret_value() if self._settings.llm_api_key else None
         )
         endpoint = f"{str(self._settings.llm_base_url).rstrip('/')}/chat/completions"
         schema = {
@@ -305,33 +325,49 @@ class SystemDiagnosticRunner:
         }
         try:
             for model in models:
+                output_mode = resolve_structured_output_mode(
+                    mode=self._settings.llm_structured_output_mode,
+                    model=model,
+                )
+                if output_mode == "tool_call":
+                    system_message = (
+                        "這是連線診斷。不得直接輸出文字或 JSON；"
+                        "必須呼叫 system_diagnostic 工具回傳結果。"
+                    )
+                    user_message = "請執行連線診斷。"
+                else:
+                    system_message = "這是連線診斷。只輸出符合 schema 的 JSON。"
+                    user_message = '{"diagnostic_status":"ok"}'
                 response = await self._client.post(
                     endpoint,
                     headers=headers,
                     json={
                         "model": model,
                         "temperature": 0,
-                        "max_tokens": 32,
-                        "response_format": {
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": "system_diagnostic",
-                                "strict": True,
-                                "schema": schema,
-                            },
-                        },
+                        "max_tokens": max(
+                            self._settings.answer_llm_max_tokens,
+                            self._settings.intent_llm_max_tokens,
+                            self._settings.conversation_llm_max_tokens,
+                        ),
+                        **structured_output_options(
+                            name="system_diagnostic",
+                            schema=schema,
+                            mode=self._settings.llm_structured_output_mode,
+                            model=model,
+                        ),
                         "messages": [
-                            {
-                                "role": "system",
-                                "content": "這是連線診斷。只輸出符合 schema 的 JSON。",
-                            },
-                            {"role": "user", "content": '{"diagnostic_status":"ok"}'},
+                            {"role": "system", "content": system_message},
+                            {"role": "user", "content": user_message},
                         ],
                     },
                 )
                 response.raise_for_status()
-                payload = response.json()
-                content = payload["choices"][0]["message"]["content"]
+                content = structured_output_content(
+                    response.json(),
+                    name="system_diagnostic",
+                    mode=self._settings.llm_structured_output_mode,
+                    model=model,
+                )
                 parsed = json.loads(content)
                 if parsed != {"diagnostic_status": "ok"}:
                     raise ValueError("unexpected structured response")
@@ -346,13 +382,12 @@ class SystemDiagnosticRunner:
         except httpx.HTTPStatusError as error:
             return _llm_failure(
                 summary=(
-                    "LLM API 拒絕 structured output 測試"
-                    f"（HTTP {error.response.status_code}）。"
+                    f"LLM API 拒絕 structured output 測試（HTTP {error.response.status_code}）。"
                 ),
                 endpoint=endpoint,
                 models=models,
                 started_at=started_at,
-                extra="確認 API key、模型 ID，以及服務是否支援 response_format=json_schema。",
+                extra="確認 API key、模型 ID，以及服務是否支援設定的 Structured Output 模式。",
             )
         except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError):
             return _llm_failure(
@@ -360,18 +395,21 @@ class SystemDiagnosticRunner:
                 endpoint=endpoint,
                 models=models,
                 started_at=started_at,
-                extra="確認 Base URL 以 /v1 結尾，並以同一模型測試 /chat/completions。",
+                extra=(
+                    "確認 Base URL 以 /v1 結尾，並以同一模型測試 /chat/completions；"
+                    "若 finish_reason=length，請提高對應的 SVA_*_LLM_MAX_TOKENS。"
+                ),
             )
         return _check(
             check_id="llm",
             category="模型 API",
             title="LLM OpenAI 相容介面",
             status=DiagnosticStatus.PASS,
-            summary="所有已啟用的 LLM 模型皆通過 chat completions 與 JSON Schema 測試。",
+            summary="所有已啟用的 LLM 模型皆通過 Chat Completions 與結構化輸出測試。",
             evidence=[
                 f"端點：{_safe_url(endpoint)}",
                 f"模型：{', '.join(models)}",
-                "驗證：response_format=json_schema",
+                f"設定模式：{self._settings.llm_structured_output_mode}",
             ],
             remediation=[],
             started_at=started_at,
@@ -466,7 +504,7 @@ class SystemDiagnosticRunner:
         except TimeoutError:
             service_available = False
         audio_chunks = 0
-        upstream_error = False
+        synthesis_error_type: str | None = None
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 async for raw_event in self._voice_service.stream_answer(
@@ -477,7 +515,7 @@ class SystemDiagnosticRunner:
                     if event.get("type") == "audio":
                         audio_chunks += 1
                     elif event.get("type") == "error":
-                        upstream_error = True
+                        synthesis_error_type = str(event.get("error_type") or "invalid_audio")
         except TimeoutError:
             return _check(
                 check_id="tts",
@@ -495,26 +533,40 @@ class SystemDiagnosticRunner:
                 started_at=started_at,
             )
         except (json.JSONDecodeError, TypeError, ValueError):
-            upstream_error = True
+            synthesis_error_type = "invalid_audio"
 
-        if upstream_error or audio_chunks == 0:
+        if synthesis_error_type or audio_chunks == 0:
+            if synthesis_error_type == "upstream_unavailable":
+                summary = "orchestrator 無法連線至 TTS API。"
+                remediation = [
+                    "確認 TTS 服務已啟動，並從 orchestrator 容器測試 "
+                    "SVA_TTS_BASE_URL 的 DNS、port、防火牆與 TLS 憑證。",
+                    "Docker Compose 可用 SVA_TTS_DOCKER_BASE_URL 指向宿主機或公司服務 DNS。",
+                ]
+            elif synthesis_error_type == "upstream_rejected":
+                summary = "TTS API 拒絕語音合成請求。"
+                remediation = [
+                    "確認 POST /v1/audio/speech 支援目前模型、voice、語言與 voice clone payload。",
+                    "Base voice-clone 模型需確認 ref_audio 與 ref_text 均存在，"
+                    "且路徑是 TTS 主機可讀取的位置。",
+                ]
+            else:
+                summary = "TTS 端點未產生本系統可解析的 WAV 音訊。"
+                remediation = [
+                    "確認 POST /v1/audio/speech 回傳完整 WAV frame，不是 JSON、MP3 或 raw PCM。",
+                ]
             return _check(
                 check_id="tts",
                 category="語音 API",
                 title="TTS 實際合成",
                 status=DiagnosticStatus.FAIL,
-                summary="TTS 端點未產生本系統可解析的 WAV 音訊。",
+                summary=summary,
                 evidence=[
                     f"端點：{_safe_url(str(self._settings.tts_base_url))}/audio/speech",
                     f"模型：{self._settings.tts_model}",
                     f"Voice clone：{'啟用' if self._voice_service.voice_clone_enabled else '停用'}",
                 ],
-                remediation=[
-                    "確認 POST /v1/audio/speech 支援目前 payload，並回傳完整 WAV frame，"
-                    "不是 JSON、MP3 或 raw PCM。",
-                    "Base voice-clone 模型需確認 ref_audio 與 ref_text 均存在，"
-                    "且路徑是 TTS 主機可讀取的位置。",
-                ],
+                remediation=remediation,
                 started_at=started_at,
             )
         status = DiagnosticStatus.PASS if service_available else DiagnosticStatus.WARNING

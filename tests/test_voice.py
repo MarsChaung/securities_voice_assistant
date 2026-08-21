@@ -338,12 +338,16 @@ def test_voice_service_reports_governed_error_for_tts_failures(
 
     events = asyncio.run(collect())
 
-    assert events == [
-        {
-            "type": "error",
-            "detail": "語音合成暫時無法使用，畫面仍保留文字答案。",
-        }
-    ]
+    assert events[0]["type"] == "error"
+    assert events[0]["detail"] == "語音合成暫時無法使用，畫面仍保留文字答案。"
+    expected_error_type = {
+        "rejected": "upstream_rejected",
+        "transport": "upstream_unavailable",
+        "incomplete": "invalid_audio",
+        "empty_stream": "invalid_audio",
+        "empty_wav": "invalid_audio",
+    }[failure_mode]
+    assert events[0]["error_type"] == expected_error_type
     assert audit.events[0]["error_type"] == "tts_unavailable"
     assert audit.events[0]["audio_chunk_count"] == 0
 
